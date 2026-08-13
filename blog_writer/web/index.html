@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blog-Writer AI 工作流系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue3 全局构建版（本地文件，避免CDN依赖） -->
+    <script src="/static/js/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="/static/css/app.css?v=7">
+</head>
+<body class="bg-gray-50 font-sans">
+    
+    <!-- ========== 嵌入模式提示 ========== -->
+    <div class="embed-banner">
+        <span>🔗 嵌入模式 · 由公司平台提供认证</span>
+    </div>
+
+    <!-- ========== 登录模态框 ========== -->
+    <div id="loginModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="closeLoginModal()"></div>
+        <div class="modal-card">
+            <div class="modal-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            </div>
+            <h2>管理员登录</h2>
+            <p class="modal-subtitle">输入密码解锁管理功能</p>
+            <div class="modal-body">
+                <label>管理员密码</label>
+                <input id="adminPassword" type="password" placeholder="请输入密码" autofocus>
+                <button onclick="doLogin()" class="btn-login">登录</button>
+                <button onclick="closeLoginModal()" class="btn-cancel">取消</button>
+            </div>
+            <div id="loginError" class="error-msg" style="display:none"></div>
+            <div id="loginHint" class="hint-msg" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ========== 主布局: 侧边栏 + 内容区 ========== -->
+    <div id="app" class="flex h-screen overflow-hidden">
+        
+        <!-- ===== 左侧边栏 ===== -->
+        <aside id="sidebar" class="sidebar">
+            <!-- Logo -->
+            <div class="sidebar-brand">
+                <div class="sidebar-logo">BW</div>
+                <div class="sidebar-title">
+                    <span class="sidebar-title-main">Blog-Writer</span>
+                    <span class="sidebar-title-sub">AI Workflow System</span>
+                </div>
+            </div>
+
+            <!-- 导航菜单 -->
+            <nav class="sidebar-nav">
+                <div class="sidebar-section-label">导航</div>
+                <button onclick="switchTab('run')" id="tab-run" class="sidebar-item active">
+                    <svg class="sidebar-item-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    <span>任务运行</span>
+                </button>
+                <button onclick="switchTab('review')" id="tab-review" class="sidebar-item">
+                    <svg class="sidebar-item-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span>人工审核</span>
+                    <span id="reviewBadge" class="sidebar-badge hidden">0</span>
+                </button>
+                <button onclick="switchTab('brands')" id="tab-brands" class="sidebar-item">
+                    <svg class="sidebar-item-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                    <span>品牌管理</span>
+                </button>
+                <div class="sidebar-section-label admin-only">管理</div>
+                <button onclick="switchTab('nodes')" id="tab-nodes" class="sidebar-item admin-only">
+                    <svg class="sidebar-item-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    <span>节点管理</span>
+                </button>
+                <button onclick="switchTab('config')" id="tab-config" class="sidebar-item admin-only">
+                    <svg class="sidebar-item-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+                    <span>系统配置</span>
+                </button>
+            </nav>
+
+            <!-- 底部用户区 -->
+            <div class="sidebar-footer">
+                <div class="sidebar-status">
+                    <span class="status-dot online"></span>
+                    <span id="sidebarStatusText" class="text-xs text-gray-500">系统运行中</span>
+                </div>
+                <div id="sidebarTokenStats" class="sidebar-stats">
+                    <div class="sidebar-stats-title">统计面板</div>
+                    <div class="sidebar-stats-grid">
+                        <div class="sidebar-stat">
+                            <span class="sidebar-stat-value" id="navCompleted">0</span>
+                            <span class="sidebar-stat-label">已完成</span>
+                        </div>
+                        <div class="sidebar-stat">
+                            <span class="sidebar-stat-value" id="navRunning">0</span>
+                            <span class="sidebar-stat-label">运行中</span>
+                        </div>
+                        <div class="sidebar-stat">
+                            <span class="sidebar-stat-value" id="navPending">0</span>
+                            <span class="sidebar-stat-label">待审核</span>
+                        </div>
+                    </div>
+                    <div class="admin-only" style="margin-top:8px;">
+                        <div class="sidebar-stats-row">
+                            <span>API 调用</span>
+                            <span id="navCallCount" class="sidebar-stats-num">0</span>
+                        </div>
+                        <div class="sidebar-stats-row">
+                            <span>Token 消耗</span>
+                            <span id="navTokenCount" class="sidebar-stats-num">0</span>
+                        </div>
+                        <div class="sidebar-stats-row">
+                            <span>预估费用</span>
+                            <span id="navCost" class="sidebar-stats-num">¥0</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="adminSection" class="sidebar-user">
+                    <button id="adminLoginBtn" onclick="openLoginModal()" class="sidebar-login-btn">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                        <span>管理员登录</span>
+                    </button>
+                    <div id="adminUser" class="hidden" style="display:none;flex-direction:column;align-items:center;gap:4px;width:100%">
+                        <span class="badge badge-success text-xs">✓ 管理员</span>
+                        <button onclick="doLogout()" class="text-xs text-red-400 hover:text-red-300 transition-colors">登出</button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ===== 主内容区 ===== -->
+        <main class="main-content">
+            
+            <!-- 顶部栏 -->
+            <header class="topbar">
+                <h2 id="pageTitle" class="topbar-title">任务运行</h2>
+                <div class="topbar-actions">
+                    <button id="btnRefresh" onclick="refreshCurrentTab()" class="topbar-btn">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        刷新
+                    </button>
+                </div>
+            </header>
+
+            <!-- 移动端统计栏（窄屏时显示，带标签） -->
+            <div id="mobileStatsBar" class="mobile-stats-bar admin-only" style="display:none">
+                <div class="mobile-stat"><span class="mobile-stat-value" id="mobCompleted">0</span><span class="mobile-stat-label">已完成</span></div>
+                <div class="mobile-stat"><span class="mobile-stat-value" id="mobRunning">0</span><span class="mobile-stat-label">运行中</span></div>
+                <div class="mobile-stat"><span class="mobile-stat-value" id="mobPending">0</span><span class="mobile-stat-label">待审核</span></div>
+                <div class="mobile-stat"><span class="mobile-stat-value" id="mobCalls">0</span><span class="mobile-stat-label">API调用</span></div>
+                <div class="mobile-stat"><span class="mobile-stat-value" id="mobTokens">0</span><span class="mobile-stat-label">Token</span></div>
+                <div class="mobile-stat"><span class="mobile-stat-value" id="mobCost">¥0</span><span class="mobile-stat-label">费用</span></div>
+            </div>
+
+            <!-- 内容区 -->
+            <div class="content-area">
+                
+                <!-- ===== 任务运行 Tab ===== -->
+                <div id="content-run">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                        <div class="lg:col-span-1 space-y-4">
+                            <!-- 新建任务 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3 class="card-title">📝 新建任务</h3>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">选择品牌</label>
+                                    <div class="flex gap-2">
+                                        <select id="brandSelect" class="form-select flex-1">
+                                            <option value="">-- 请选择品牌 --</option>
+                                        </select>
+                                        <button type="button" onclick="Brands.openUploadModal()" class="btn btn-outline btn-sm whitespace-nowrap">
+                                            + 上传新品牌
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">关键词</label>
+                                    <input id="keywords" type="text" placeholder="SMS API integration" class="form-input">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">附加要求（可选）</label>
+                                    <textarea id="userNote" rows="2" placeholder="偏向技术受众，突出API易用性" class="form-textarea"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">禁用词白名单（可选）</label>
+                                    <input id="forbiddenWhitelist" type="text" placeholder="保证, 最好（逗号分隔）" class="form-input">
+                                    <p class="form-hint">填写后本任务写作/Gate 检测豁免这些词，不改品牌词库</p>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">运行模式</label>
+                                    <select id="runMode" class="form-select">
+                                        <option value="auto">全自动（跳过审核）</option>
+                                        <option value="supervised" selected>监督模式（关键节点审核）</option>
+                                        <option value="manual">手动模式（每步确认）</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">AI 模型</label>
+                                    <select id="aiModel" class="form-select">
+                                        <option value="default">deepseek-v4-flash（默认，速度快）</option>
+                                        <option value="pro">deepseek-v4-pro（更强推理）</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">温度系数 (Temperature)</label>
+                                    <input id="temperature" type="number" step="0.1" min="0" max="2" value="0.7" class="form-input">
+                                    <p class="form-hint">控制生成随机性，0=严谨确定，越高创造力越强</p>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">最大输出 Token 数 (Max Tokens)</label>
+                                    <input id="maxTokens" type="number" min="1" max="256000" value="8192" class="form-input">
+                                </div>
+                                <button onclick="startTask()" class="btn btn-primary btn-block btn-lg">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                    启动任务
+                                </button>
+                            </div>
+
+                            <!-- 系统状态 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3 class="card-title text-sm">📊 系统状态</h3>
+                                </div>
+                                <div class="stats-row">
+                                    <div class="stat-card stat-success">
+                                        <div class="stat-value" id="statCompleted">0</div>
+                                        <div class="stat-label">已完成</div>
+                                    </div>
+                                    <div class="stat-card stat-primary">
+                                        <div class="stat-value" id="statRunning">0</div>
+                                        <div class="stat-label">运行中</div>
+                                    </div>
+                                    <div class="stat-card stat-warning">
+                                        <div class="stat-value" id="statPending">0</div>
+                                        <div class="stat-label">待审核</div>
+                                    </div>
+                                </div>
+                                <div class="admin-only border-t border-gray-100 pt-3 mt-1">
+                                    <div class="flex justify-between text-sm py-1"><span class="text-gray-500">Token 消耗</span><span id="statTokens" class="font-bold text-purple-600">0</span></div>
+                                    <div class="flex justify-between text-sm py-1"><span class="text-gray-500">API 调用</span><span id="statCalls" class="font-medium">0</span></div>
+                                    <div class="flex justify-between text-sm py-1"><span class="text-gray-500">平均 Token</span><span id="statAvgTokens" class="font-medium">0</span></div>
+                                    <div class="flex justify-between text-sm py-1"><span class="text-gray-500">预估费用</span><span id="statCost" class="font-medium text-orange-600">¥0.00</span></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-2 space-y-4">
+                            <!-- 任务列表 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3 class="card-title">📋 任务列表</h3>
+                                    <div class="flex items-center gap-3">
+                                        <span id="taskLastUpdate" class="text-xs text-gray-400"></span>
+                                        <button onclick="refreshTasks()" class="btn btn-secondary btn-sm" title="刷新任务列表">🔄 刷新</button>
+                                    </div>
+                                </div>
+                                <div id="taskList" class="space-y-2">
+                                    <p class="text-gray-400 text-center py-8 text-sm">暂无任务，请创建新任务</p>
+                                </div>
+                            </div>
+
+                            <!-- 执行日志 -->
+                            <div class="log-container">
+                                <div class="log-header">
+                                    <h3>📜 执行日志</h3>
+                                    <div class="log-actions">
+                                        <button onclick="downloadLogs()">📥 下载</button>
+                                        <button onclick="clearLogs()">🗑️ 清空</button>
+                                    </div>
+                                </div>
+                                <div id="logOutput" class="log-entry">
+                                    <span class="log-dim">等待任务启动...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== 人工审核 Tab ===== -->
+                <div id="content-review" class="hidden">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">✅ 待审核任务</h3>
+                        </div>
+                        <div id="reviewList" class="space-y-3">
+                            <p class="text-gray-400 text-center py-8 text-sm">暂无待审核任务</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== 品牌管理 Tab ===== -->
+                <div id="content-brands" class="hidden">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📦 品牌管理</h3>
+                            <div class="flex items-center gap-3">
+                                <span id="brandManagerStats" class="text-xs text-gray-500"></span>
+                                <button onclick="Brands.openUploadModal()" class="btn btn-primary btn-sm">+ 上传新品牌</button>
+                            </div>
+                        </div>
+                        <div id="brandManagerList" class="space-y-3">
+                            <p class="text-gray-400 text-center py-8 text-sm">加载中...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== 节点管理 Tab ===== -->
+                <div id="content-nodes" class="hidden">
+                    <div class="grid grid-cols-1 lg:grid-cols-4 gap-5">
+                        <div class="lg:col-span-1">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3 class="card-title text-sm">📁 节点列表</h3>
+                                    <button onclick="createNewNode()" class="btn btn-primary btn-sm">+ 新建</button>
+                                </div>
+                                <div id="nodeList" class="space-y-1">
+                                    <p class="text-gray-400 text-sm text-center py-4">加载中...</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="lg:col-span-3">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3 id="nodeEditorTitle" class="card-title">📝 节点编辑器</h3>
+                                    <div class="flex gap-2">
+                                        <button onclick="validateNode()" class="btn btn-warning btn-sm">校验</button>
+                                        <button onclick="saveNode()" class="btn btn-success btn-sm">💾 保存</button>
+                                        <button onclick="deleteNode()" class="btn btn-danger btn-sm">删除</button>
+                                    </div>
+                                </div>
+                                <textarea id="nodeEditor" rows="20" class="node-editor-textarea" placeholder="选择一个节点或创建新节点..."></textarea>
+                                <div id="validationResult" class="mt-3"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== 系统配置 Tab ===== -->
+                <div id="content-config" class="hidden">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                        <!-- LLM配置 -->
+                        <div class="card">
+                            <div class="card-header"><h3 class="card-title">🤖 LLM 配置</h3></div>
+                            <div class="form-group">
+                                <label class="form-label">选择模型</label>
+                                <select id="llmModel" class="form-select"><option value="default">默认模型</option></select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">API Base URL</label>
+                                <div class="sensitive-field">
+                                    <span id="baseUrlStatus" class="sensitive-status"></span>
+                                    <button onclick="showChangeBaseUrlModal()" class="btn btn-outline btn-sm">修改</button>
+                                </div>
+                                <p class="form-hint">URL 仅存储在服务器，前端不展示实际值</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">API Key</label>
+                                <div class="sensitive-field">
+                                    <span id="apiKeyStatus" class="sensitive-status"></span>
+                                    <button onclick="showChangeApiKeyModal()" class="btn btn-outline btn-sm">修改</button>
+                                    <button onclick="clearApiKey()" class="btn btn-ghost btn-sm" style="color:var(--danger)">清除</button>
+                                </div>
+                                <p class="form-hint">密钥仅存储在服务器，前端不展示实际值</p>
+                            </div>
+                            <div class="form-group"><label class="form-label">模型名称</label><input id="llmModelName" type="text" class="form-input"></div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="form-group"><label class="form-label">温度系数</label><input id="llmTemperature" type="number" step="0.1" min="0" max="2" class="form-input"></div>
+                            <div class="form-group"><label class="form-label">最大输出 Token 数</label><input id="llmMaxTokens" type="number" class="form-input"></div>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="saveLLMConfig()" class="btn btn-primary flex-1">💾 保存 LLM 配置</button>
+                                <button onclick="testLLMConnection()" class="btn btn-outline">🔌 测试连接</button>
+                            </div>
+                        </div>
+
+                        <!-- 工作流配置 -->
+                        <div class="card">
+                            <div class="card-header"><h3 class="card-title">⚙️ 工作流配置</h3></div>
+                            <div class="form-group"><label class="form-label">默认运行模式</label><select id="wfDefaultMode" class="form-select"><option value="auto">全自动</option><option value="supervised">监督模式</option><option value="manual">手动模式</option></select></div>
+                            <div class="form-group"><label class="form-label">每步最大迭代次数</label><input id="wfMaxIterations" type="number" class="form-input"></div>
+                            <div class="form-group"><label class="form-label">步骤超时（分钟）</label><input id="wfStepTimeout" type="number" class="form-input"></div>
+                            <div class="form-group"><label class="form-label">实例根目录</label><input id="wfInstanceRoot" type="text" class="form-input"></div>
+                            <button onclick="saveWorkflowConfig()" class="btn btn-primary btn-block">💾 保存工作流配置</button>
+                        </div>
+
+                        <!-- Token统计 -->
+                        <div class="lg:col-span-2 card">
+                            <div class="card-header"><h3 class="card-title">📊 Token 消耗统计</h3></div>
+                            <div class="stats-row grid-cols-4">
+                                <div class="stat-card stat-primary"><div class="stat-value" id="statTotalTokens">0</div><div class="stat-label">总 Token 数</div></div>
+                                <div class="stat-card stat-success"><div class="stat-value" id="statTotalCalls">0</div><div class="stat-label">API 调用次数</div></div>
+                                <div class="stat-card" style="background:var(--primary-bg);border-color:var(--primary-light)"><div class="stat-value" id="statAvgTokens" style="color:var(--primary)">0</div><div class="stat-label">平均 Token/调用</div></div>
+                                <div class="stat-card stat-warning"><div class="stat-value" id="statEstCost">¥0</div><div class="stat-label">预估成本</div></div>
+                            </div>
+                            <div class="mt-4">
+                                <h4 class="text-sm font-bold text-gray-700 mb-3">📈 任务统计</h4>
+                                <div class="grid grid-cols-3 gap-4 text-sm">
+                                    <div class="bg-gray-50 rounded-lg p-3"><span class="text-gray-500">总任务数</span><div class="text-xl font-bold" id="statTotal">0</div></div>
+                                    <div class="bg-gray-50 rounded-lg p-3"><span class="text-gray-500">成功率</span><div class="text-xl font-bold text-green-600" id="statSuccessRate">0%</div></div>
+                                    <div class="bg-gray-50 rounded-lg p-3"><span class="text-gray-500">平均耗时</span><div class="text-xl font-bold" id="statAvgDuration">0s</div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- ========== 修改 API Key 模态框 ========== -->
+    <div id="apiKeyModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="closeApiKeyModal()"></div>
+        <div class="modal-card">
+            <div class="modal-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            </div>
+            <h2>修改 API Key</h2>
+            <p class="modal-subtitle">输入新的 API Key（将覆盖当前配置）</p>
+            <div class="modal-body">
+                <label>新 API Key</label>
+                <input id="newApiKey" type="password" placeholder="sk-..." autofocus>
+                <label style="margin-top: 0.75rem;">确认 API Key</label>
+                <input id="confirmApiKey" type="password" placeholder="再次输入确认">
+                <button onclick="saveApiKey()" class="btn-login">保存</button>
+                <button onclick="closeApiKeyModal()" class="btn-cancel">取消</button>
+            </div>
+            <div id="apiKeyError" class="error-msg" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ========== 修改 Base URL 模态框 ========== -->
+    <div id="baseUrlModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="closeBaseUrlModal()"></div>
+        <div class="modal-card">
+            <div class="modal-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
+            </div>
+            <h2>修改 API Base URL</h2>
+            <p class="modal-subtitle">输入新的 API 端点地址</p>
+            <div class="modal-body">
+                <label>新 Base URL</label>
+                <input id="newBaseUrl" type="text" placeholder="https://api.example.com/v1" autofocus>
+                <button onclick="saveBaseUrl()" class="btn-login">保存</button>
+                <button onclick="closeBaseUrlModal()" class="btn-cancel">取消</button>
+            </div>
+            <div id="baseUrlError" class="error-msg" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ========== 上传新品牌资料 模态框 ========== -->
+    <div id="brandUploadModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="Brands.closeUploadModal()"></div>
+        <div class="modal-card">
+            <div class="modal-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+            </div>
+            <h2>上传新品牌资料</h2>
+            <p class="modal-subtitle">输入品牌中文名称并上传品牌文档（.md / .txt）</p>
+            <div class="modal-body">
+                <label>品牌显示名称（中文）</label>
+                <input id="brandDisplayName" type="text" placeholder="例如：SMS Boosting" autofocus>
+                <label style="margin-top: 0.75rem;">品牌文档（仅 .md / .txt，单文件≤10MB）</label>
+                <div class="flex gap-2">
+                    <button type="button" onclick="document.getElementById('brandFiles').click()" class="btn btn-outline btn-sm flex-1">
+                        📄 选择文件（可多选）
+                    </button>
+                    <button type="button" onclick="document.getElementById('brandFolderFiles').click()" class="btn btn-outline btn-sm flex-1">
+                        📁 选择文件夹
+                    </button>
+                </div>
+                <input id="brandFiles" type="file" multiple accept=".md,.txt" class="hidden" onchange="Brands.onFilesSelected()">
+                <input id="brandFolderFiles" type="file" webkitdirectory directory multiple class="hidden" onchange="Brands.onFolderSelected()">
+                <div id="brandFilePreview" class="text-xs text-gray-500 mt-2"></div>
+                <button onclick="Brands.upload()" class="btn-login">上传</button>
+                <button onclick="Brands.closeUploadModal()" class="btn-cancel">取消</button>
+            </div>
+            <div id="brandUploadError" class="error-msg" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- JS模块 -->
+    <script src="/static/js/api.js?v=9"></script>
+    <script src="/static/js/auth.js?v=9"></script>
+    <script src="/static/js/ui.js?v=9"></script>
+    <script src="/static/js/tasks.js?v=10"></script>
+    <script src="/static/js/brands.js?v=9"></script>
+    <script src="/static/js/brand-manager.js?v=9"></script>
+    <!-- <script src="/static/js/vue-brand-manager.js?v=9"></script> 暂时禁用，用于调试 -->
+    <script src="/static/js/nodes.js?v=9"></script>
+    <script src="/static/js/reviews.js?v=9"></script>
+    <script src="/static/js/config.js?v=9"></script>
+    <script src="/static/js/app.js?v=10"></script>
+
+    <!-- ========== 品牌管理弹窗 ========== -->
+    <div id="brandFilesModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="BrandManager.closeFilesModal()"></div>
+        <div class="modal-card" style="width: 36rem; max-width: 90vw;">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="brandFilesTitle" class="text-lg font-semibold">文件列表</h3>
+                <button onclick="BrandManager.closeFilesModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+            <div id="brandFilesList" class="space-y-2 max-h-96 overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <div id="brandRenameModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="BrandManager.closeRenameModal()"></div>
+        <div class="modal-card">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold">重命名品牌</h3>
+                <button onclick="BrandManager.closeRenameModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label">品牌显示名称</label>
+                    <input id="brandRenameInput" type="text" class="form-input" placeholder="输入新的品牌名称" onkeyup="if(event.key==='Enter') BrandManager.confirmRename()">
+                </div>
+                <p class="text-xs text-gray-500">注意：只修改显示名称，品牌ID和目录名不变。</p>
+                <div class="flex justify-end gap-2">
+                    <button onclick="BrandManager.closeRenameModal()" class="btn btn-outline">取消</button>
+                    <button onclick="BrandManager.confirmRename()" class="btn btn-primary">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,51 @@
+# Pre-commit 钩子配置
+# 所有工具配置统一在 pyproject.toml 中管理
+# 安装：pre-commit install
+# 手动运行：pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.0
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        args: [--config, pyproject.toml]
+      - id: ruff-format
+        name: ruff (format)
+        args: [--config, pyproject.toml]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        name: mypy (type check)
+        additional_dependencies: [fastapi, pydantic, httpx]
+        args: [--config-file, pyproject.toml]
+        exclude: tests/
+
+  - repo: https://github.com/econchick/interrogate
+    rev: 1.6.0
+    hooks:
+      - id: interrogate
+        name: interrogate (doc coverage ≥80%)
+        args: [--config, pyproject.toml]
+        exclude: tests/
+
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.8
+    hooks:
+      - id: bandit
+        name: bandit (security)
+        args: [-c, pyproject.toml, -r, blog_writer/, -ll]
+        exclude: tests/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict

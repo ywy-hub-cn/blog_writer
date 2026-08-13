@@ -1,0 +1,53 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# 环境文件
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 数据（运行时 volume；不要排除包内 nodes）
+instance/
+*.db
+*.db-shm
+*.db-wal
+
+# 根目录可选数据（镜像内使用 blog_writer/nodes 与 brands/）
+# brands/ 由 Dockerfile COPY；本地大文件可自行调整
+
+# 日志
+*.log
+logs/
+
+# 测试
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+docker-compose.override.yml
+
+# 临时文件
+*.tmp
+*.bak
+*.corrupted

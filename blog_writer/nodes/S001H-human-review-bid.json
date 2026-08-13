@@ -1,0 +1,73 @@
+{
+  "id": "step.blog.writer.human_review_bid",
+  "seq": 1.5,
+  "name": "BID人工审核",
+  "exec_type": "human_review",
+  "kind": "human_review",
+  "resources": {
+    "allow": [
+      "read",
+      "write"
+    ],
+    "files": [
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识（完整7层40点位）"
+      },
+      {
+        "id": "startup",
+        "path": "001 启动确认.md",
+        "desc": "启动确认（关键词、附加要求）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.bid"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "展示完整的 BID 摘要信息",
+      "展示风险等级（基于 RK 字段）",
+      "提供修改关键词、标题、提示词的选项",
+      "记录人工审核决策日志"
+    ],
+    "forbidden": [
+      "跳过人工审核直接进入下一步",
+      "不记录审核决策"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "展示审核信息",
+      "workflow": "读取 000 BID.json，提取并展示以下信息：\n\n## 📋 BID人工审核\n\n### 当前状态\n- **关键词**: {BID.summary.keyword}\n- **标题**: {BID.summary.title}\n- **SEO标题**: {BID.summary.seo_title}\n- **Slug**: {BID.summary.slug}\n- **Meta描述**: {BID.summary.meta_description}\n- **风险等级**: {RK值对应等级}\n\n### BID摘要\n- CO·内容核心: {at} {th} {pi} {ct} {pv} {pr} {al} {dp} {tn} {so} {ev}\n- WB·业务目标: {obj} {uc} {js} {cta} {ci} {pm} {rk}\n- SE·SEO: {si} {qs} {kl} {kc} {sf} {sc} {ic}\n- GE·AI角色: {gi} {gs} {gf} {gn} {gc}\n- CL·集群: {pi} {sub} {cr} {il} {lt} {pf}\n- LO·语言: {lo}\n- ST·结构模板: {st}\n\n### AI建议\n- 语气描述: {BID.summary.tone}\n- 深度描述: {BID.summary.depth}\n- 受众描述: {BID.summary.audience}\n\n### 🎯 操作选项\n1. ✓ 通过 — 确认BID，直接进入内容PRD阶段\n2. ✏ 修改关键词 — 重新输入关键词，重跑BID推断\n3. ✏ 修改标题 — 调整文章标题和SEO标题\n4. ✏ 修改提示词 — 更新user_note写作要求\n5. 🔄 重新推断 — 重新执行BID推断\n\n### 📝 修改输入\n请选择操作后填写修改内容：\n___________________________\n\n[确认并继续] [驳回并返回修改]"
+    },
+    {
+      "id": 2,
+      "name": "处理人工决策",
+      "workflow": "根据人工选择的操作执行：\n\n**选项1: 通过**\n- 写入审核日志\n- 进入 S002 内容PRD\n\n**选项2: 修改关键词**\n- 更新 001 启动确认.md 中的关键词\n- 更新 000 BID.json 中的 keyword\n- 返回 S001 重新推断\n\n**选项3: 修改标题**\n- 更新 000 BID.json 中的 title、seo_title、slug\n- 继续 S002 内容PRD\n\n**选项4: 修改提示词**\n- 更新 001 启动确认.md 中的 user_note\n- 更新 000 BID.json\n- 返回 S001 重新推断\n\n**选项5: 重新推断**\n- 清空 000 BID.json 的 validation.passed\n- 返回 S001 重新推断\n\n无论选择哪种操作，都需写入审核日志：\n\n```bash\npython3 -c \"\nimport json\nimport datetime\n\nlog = {\n    'review_id': 'review-bid-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S'),\n    'step_id': 'step.blog.writer.human_review_bid',\n    'timestamp': datetime.datetime.now().isoformat(),\n    'action': '{用户选择的操作}',\n    'data_before': {{\n        'keywords': '{原关键词}',\n        'title': '{原标题}',\n        'risk_level': '{原风险等级}'\n    }},\n    'data_after': {{\n        'keywords': '{新关键词}',\n        'title': '{新标题}'\n    }},\n    'comments': '{用户备注}'\n}\n\nwith open('001H 审核日志.md', 'a', encoding='utf-8') as f:\n    f.write(f'## BID审核日志 - {log[\\\"timestamp\\\"]}\\n')\n    f.write(f'- 操作: {log[\\\"action\\\"]}\\n')\n    f.write(f'- 备注: {log[\\\"comments\\\"]}\\n')\n\"\n```"
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "审核日志文件存在",
+      "on_fail": "warn",
+      "target": "file:001H 审核日志.md"
+    },
+    {
+      "id": 2,
+      "rule": "000 BID.json 存在且 validation.passed = true",
+      "on_fail": "pass=false",
+      "target": "file:000 BID.json"
+    }
+  ],
+  "params": {
+    "mode": {
+      "type": "string",
+      "default": "auto",
+      "description": "运行模式: auto(自动), supervised(关键节点审核), manual(每步确认)"
+    }
+  }
+}

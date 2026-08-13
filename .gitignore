@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+blogWriter/
+env/
+.venv/
+
+# 缓存和日志
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境配置
+.env
+.env.local
+.env.*.local
+
+# 数据库
+*.db
+*.sqlite
+
+# 操作系统
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 项目特定
+blog_writer.zip
+Prompt_rewrite.tar.tar.gz
+activate_env.bat
+
+# 临时脚本和文件
+scripts/
+.trae-html-share-packages/
+check_env.py
+build_css.py
+start_terminal.py
+verify_security.py
+test_api.py
+test_api_e2e.py
+test_security.py
+test_state_mgmt.py
+web_app.py
+test-batch.json
+test-single.json
+
+# Node (如有)
+node_modules/
+
+# Docker
+docker-compose.override.yml
+
+# 敏感配置（如需提交请加.example后缀）
+# config.json 由部署时生成，不提交
+config.json
+batch-config.json
+batch-config-v2.json
+
+# 运行时数据（数据库等）
+*.db
+*.sqlite
+instance/

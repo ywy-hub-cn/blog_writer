@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blog-Writer 社媒运营AI工作流架构图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #fff;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 50px 40px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 36px;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+        
+        .header p {
+            font-size: 18px;
+            opacity: 0.95;
+        }
+        
+        .content {
+            padding: 50px 40px;
+        }
+        
+        .section {
+            margin-bottom: 60px;
+        }
+        
+        .section-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #667eea;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .section-title .icon {
+            font-size: 32px;
+        }
+        
+        .flowchart {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0;
+        }
+        
+        .flow-phase {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .phase-header {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 12px 25px;
+            border-radius: 10px 10px 0 0;
+            font-weight: 600;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .phase-content {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-top: none;
+            border-radius: 0 0 10px 10px;
+            padding: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: center;
+        }
+        
+        .node {
+            background: #fff;
+            border: 2px solid #ddd;
+            border-radius: 12px;
+            padding: 15px 18px;
+            min-width: 140px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .node:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        
+        .node .step-id {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 5px;
+            font-family: monospace;
+        }
+        
+        .node .step-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .node .step-output {
+            font-size: 11px;
+            color: #666;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed #ddd;
+        }
+        
+        .node.input {
+            border-color: #2196F3;
+            background: #E3F2FD;
+        }
+        
+        .node.process {
+            border-color: #4CAF50;
+            background: #E8F5E9;
+        }
+        
+        .node.review {
+            border-color: #FF9800;
+            background: #FFF3E0;
+        }
+        
+        .node.risk {
+            border-color: #f44336;
+            background: #FFEBEE;
+        }
+        
+        .node.output {
+            border-color: #9C27B0;
+            background: #F3E5F5;
+        }
+        
+        .node .badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #fff;
+            font-weight: bold;
+        }
+        
+        .badge.review-badge {
+            background: #FF9800;
+        }
+        
+        .badge.risk-badge {
+            background: #f44336;
+        }
+        
+        .badge.output-badge {
+            background: #9C27B0;
+        }
+        
+        .arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 5px 0;
+        }
+        
+        .arrow-line {
+            width: 3px;
+            height: 20px;
+            background: #999;
+        }
+        
+        .arrow-head {
+            width: 0;
+            height: 0;
+            border-left: 10px solid transparent;
+            border-right: 10px solid transparent;
+            border-top: 12px solid #999;
+        }
+        
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+        }
+        
+        .legend-color {
+            width: 30px;
+            height: 20px;
+            border-radius: 5px;
+            border: 2px solid #ddd;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+        }
+        
+        .stat-card .number {
+            font-size: 48px;
+            font-weight: 700;
+        }
+        
+        .stat-card .label {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        
+        .mode-comparison {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
+        }
+        
+        .mode-card {
+            background: #fff;
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 25px;
+            transition: all 0.3s ease;
+        }
+        
+        .mode-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+        
+        .mode-card.auto {
+            border-color: #4CAF50;
+            background: linear-gradient(135deg, #E8F5E9 0%, #fff 100%);
+        }
+        
+        .mode-card.supervised {
+            border-color: #FF9800;
+            background: linear-gradient(135deg, #FFF3E0 0%, #fff 100%);
+        }
+        
+        .mode-card.manual {
+            border-color: #f44336;
+            background: linear-gradient(135deg, #FFEBEE 0%, #fff 100%);
+        }
+        
+        .mode-card h3 {
+            font-size: 22px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .mode-card .mode-desc {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+        
+        .mode-card .mode-features {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .mode-card .mode-features li {
+            padding: 8px 0;
+            font-size: 13px;
+            color: #555;
+            border-bottom: 1px dashed #eee;
+        }
+        
+        .mode-card .mode-features li:last-child {
+            border-bottom: none;
+        }
+        
+        .risk-flow {
+            background: #fff;
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 30px;
+        }
+        
+        .risk-levels {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .risk-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px 20px;
+            border-radius: 10px;
+            transition: all 0.3s ease;
+        }
+        
+        .risk-item:hover {
+            transform: translateX(5px);
+        }
+        
+        .risk-badge {
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 14px;
+            min-width: 80px;
+            text-align: center;
+            color: #fff;
+        }
+        
+        .risk-low {
+            background: #4CAF50;
+        }
+        
+        .risk-medium-low {
+            background: #8BC34A;
+        }
+        
+        .risk-medium {
+            background: #FF9800;
+        }
+        
+        .risk-medium-high {
+            background: #FF5722;
+        }
+        
+        .risk-high {
+            background: #f44336;
+        }
+        
+        .risk-info {
+            flex: 1;
+        }
+        
+        .risk-info .rk-label {
+            font-weight: 600;
+            font-size: 15px;
+            margin-bottom: 5px;
+        }
+        
+        .risk-info .rk-desc {
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .risk-action {
+            padding: 10px 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+        
+        .output-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        
+        .output-card {
+            background: #fff;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .output-card:hover {
+            border-color: #9C27B0;
+            box-shadow: 0 10px 30px rgba(156, 39, 176, 0.15);
+        }
+        
+        .output-card .output-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        
+        .output-card .output-name {
+            font-weight: 600;
+            font-size: 15px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .output-card .output-format {
+            display: inline-block;
+            padding: 3px 10px;
+            background: #F3E5F5;
+            color: #9C27B0;
+            border-radius: 5px;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+        
+        .output-card .output-desc {
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .output-card.final {
+            background: linear-gradient(135deg, #F3E5F5 0%, #fff 100%);
+            border-color: #9C27B0;
+            border-width: 3px;
+        }
+        
+        .output-card.final .output-name {
+            color: #6A1B9A;
+        }
+        
+        .footer {
+            background: #333;
+            color: #fff;
+            padding: 30px 40px;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin: 5px 0;
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                padding: 20px 10px;
+            }
+            
+            .content {
+                padding: 30px 20px;
+            }
+            
+            .header {
+                padding: 30px 20px;
+            }
+            
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .section-title {
+                font-size: 22px;
+            }
+            
+            .node {
+                min-width: 120px;
+                padding: 12px 14px;
+            }
+            
+            .stat-card .number {
+                font-size: 36px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Blog-Writer 社媒运营AI工作流</h1>
+            <p>配置驱动 · BID标识 · 智能审核 · 批量执行</p>
+        </div>
+        
+        <div class="content">
+            <!-- 统计数据 -->
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">📈</span>
+                    核心指标
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="number">16</div>
+                        <div class="label">工作流步骤</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number">3</div>
+                        <div class="label">人工审核节点</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number">5</div>
+                        <div class="label">风险等级</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number">3</div>
+                        <div class="label">运行模式</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number">8</div>
+                        <div class="label">核心产出文件</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number">5+</div>
+                        <div class="label">批量并发任务</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 整体流程图 -->
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">🔄</span>
+                    整体工作流程
+                </div>
+                
+                <div class="flowchart">
+                    <!-- 阶段1: 初始化 -->
+                    <div class="flow-phase">
+                        <div class="phase-header">📦 阶段一：初始化 & BID标识</div>
+                        <div class="phase-content">
+                            <div class="node input">
+                                <div class="step-id">S000</div>
+                                <div class="step-name">启动初始化</div>
+                                <div class="step-output">→ 001 启动确认.md</div>
+                            </div>
+                            <div class="node process">
+                                <div class="step-id">S001</div>
+                                <div class="step-name">BID自动推断</div>
+                                <div class="step-output">→ 000 BID.json</div>
+                            </div>
+                            <div class="node review">
+                                <span class="badge review-badge">🟡</span>
+                                <div class="step-id">S001H</div>
+                                <div class="step-name">BID人工审核</div>
+                                <div class="step-output">关键词/标题/提示词</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">
+                        <div class="arrow-line"></div>
+                        <div class="arrow-head"></div>
+                    </div>
+                    
+                    <!-- 阶段2: 内容策划 -->
+                    <div class="flow-phase">
+                        <div class="phase-header">📝 阶段二：内容策划</div>
+                        <div class="phase-content">
+                            <div class="node process">
+                                <div class="step-id">S002</div>
+                                <div class="step-name">内容PRD生成</div>
+                                <div class="step-output">→ 002 内容PRD.md</div>
+                            </div>
+                            <div class="node process">
+                                <div class="step-id">S003</div>
+                                <div class="step-name">文章结构生成</div>
+                                <div class="step-output">→ 003 文章结构.md</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">
+                        <div class="arrow-line"></div>
+                        <div class="arrow-head"></div>
+                    </div>
+                    
+                    <!-- 阶段3: 正文写作 -->
+                    <div class="flow-phase">
+                        <div class="phase-header">✍️ 阶段三：正文写作</div>
+                        <div class="phase-content">
+                            <div class="node process">
+                                <div class="step-id">S004</div>
+                                <div class="step-name">正文写作</div>
+                                <div class="step-output">→ 004 正文.md</div>
+                            </div>
+                            <div class="node review">
+                                <span class="badge review-badge">🟡</span>
+                                <div class="step-id">S004H</div>
+                                <div class="step-name">正文人工审核</div>
+                                <div class="step-output">内容/结构/风格</div>
+                            </div>
+                            <div class="node process">
+                                <div class="step-id">S004-V</div>
+                                <div class="step-name">内容质量校验</div>
+                                <div class="step-output">H2≥4/FAQ/引用</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">
+                        <div class="arrow-line"></div>
+                        <div class="arrow-head"></div>
+                    </div>
+                    
+                    <!-- 阶段4: 结构化处理 -->
+                    <div class="flow-phase">
+                        <div class="phase-header">🏗️ 阶段四：结构化处理</div>
+                        <div class="phase-content">
+                            <div class="node process">
+                                <div class="step-id">S005</div>
+                                <div class="step-name">字段化处理</div>
+                                <div class="step-output">→ 005 字段化文档.html</div>
+                            </div>
+                            <div class="node process">
+                                <div class="step-id">S006</div>
+                                <div class="step-name">呈现文档生成</div>
+                                <div class="step-output">→ 006 呈现文档.html</div>
+                            </div>
+                            <div class="node process">
+                                <div class="step-id">S007</div>
+                                <div class="step-name">视觉素材生产</div>
+                                <div class="step-output">Mermaid/图片配图</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">
+                        <div class="arrow-line"></div>
+                        <div class="arrow-head"></div>
+                    </div>
+                    
+                    <!-- 阶段5: 评审校验 -->
+                    <div class="flow-phase">
+                        <div class="phase-header">🔍 阶段五：评审校验</div>
+                        <div class="phase-content">
+                            <div class="node process">
+                                <div class="step-id">S008</div>
+                                <div class="step-name">AI自审+打分</div>
+                                <div class="step-output">→ 008 自审结果.md</div>
+                            </div>
+                            <div class="node risk">
+                                <span class="badge risk-badge">🔴</span>
+                                <div class="step-id">S009</div>
+                                <div class="step-name">Gate系统校验</div>
+                                <div class="step-output">禁用词/URL/合规</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">
+                        <div class="arrow-line"></div>
+                        <div class="arrow-head"></div>
+                    </div>
+                    
+                    <!-- 阶段6: 风险审批 -->
+                    <div class="flow-phase">
+                        <div class="phase-header">⚠️ 阶段六：风险审批</div>
+                        <div class="phase-content">
+                            <div class="node review">
+                                <span class="badge review-badge">🟡</span>
+                                <div class="step-id">S009H</div>
+                                <div class="step-name">Gate人工审批</div>
+                                <div class="step-output">单级/多级审批</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">
+                        <div class="arrow-line"></div>
+                        <div class="arrow-head"></div>
+                    </div>
+                    
+                    <!-- 阶段7: 发布 -->
+                    <div class="flow-phase">
+                        <div class="phase-header">🚀 阶段七：发布交付</div>
+                        <div class="phase-content">
+                            <div class="node output">
+                                <span class="badge output-badge">📦</span>
+                                <div class="step-id">S010</div>
+                                <div class="step-name">发布包组装</div>
+                                <div class="step-output">→ 007 发布包.md</div>
+                            </div>
+                            <div class="node output">
+                                <span class="badge output-badge">📢</span>
+                                <div class="step-id">S011</div>
+                                <div class="step-name">WordPress发布</div>
+                                <div class="step-output">🎉 发布完成</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 图例 -->
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #E3F2FD; border-color: #2196F3;"></div>
+                        <span>输入/启动</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #E8F5E9; border-color: #4CAF50;"></div>
+                        <span>自动处理</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #FFF3E0; border-color: #FF9800;"></div>
+                        <span>🟡 人工审核</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #FFEBEE; border-color: #f44336;"></div>
+                        <span>🔴 高风险节点</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #F3E5F5; border-color: #9C27B0;"></div>
+                        <span>📦 最终产出</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 三种运行模式 -->
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">⚙️</span>
+                    三种运行模式
+                </div>
+                
+                <div class="mode-comparison">
+                    <div class="mode-card auto">
+                        <h3>⚡ 全自动模式 (auto)</h3>
+                        <p class="mode-desc">无人干预，快速生产，适用于低风险标准化内容</p>
+                        <ul class="mode-features">
+                            <li>✅ 跳过所有人工审核节点</li>
+                            <li>✅ 自动完成所有步骤</li>
+                            <li>✅ 适用于 RK≤02 低风险内容</li>
+                            <li>✅ 速度最快，批量首选</li>
+                            <li>⚠️ 质量完全依赖AI</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="mode-card supervised">
+                        <h3>👁️ 监督模式 (supervised)</h3>
+                        <p class="mode-desc">关键节点人工审核，平衡效率与质量</p>
+                        <ul class="mode-features">
+                            <li>✅ S001H BID人工审核（必选）</li>
+                            <li>✅ S004H 正文人工审核（必选）</li>
+                            <li>✅ S009H Gate审批（RK≥03时）</li>
+                            <li>✅ 推荐日常使用模式</li>
+                            <li>✅ 支持中途修改关键词/提示词</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="mode-card manual">
+                        <h3>✋ 手动模式 (manual)</h3>
+                        <p class="mode-desc">每步人工确认，适用于高风险敏感内容</p>
+                        <ul class="mode-features">
+                            <li>✅ 每一步都需要人工确认</li>
+                            <li>✅ 所有审核节点强制通过</li>
+                            <li>✅ 适用于 RK≥04 高风险内容</li>
+                            <li>✅ 最安全但最慢</li>
+                            <li>✅ 支持详细调整和修改</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 风险分级路由 -->
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">⚠️</span>
+                    风险分级路由
+                </div>
+                
+                <div class="risk-flow">
+                    <p style="text-align: center; margin-bottom: 25px; font-size: 15px; color: #666;">
+                        <strong>S009 Gate校验完成后，根据 RK 风险等级自动选择路由策略：</strong>
+                    </p>
+                    
+                    <div class="risk-levels">
+                        <div class="risk-item" style="background: #E8F5E9;">
+                            <div class="risk-badge risk-low">RK01</div>
+                            <div class="risk-info">
+                                <div class="rk-label">低风险</div>
+                                <div class="rk-desc">通用知识、教育内容</div>
+                            </div>
+                            <div class="risk-action">✅ 自动发布 → S010</div>
+                        </div>
+                        
+                        <div class="risk-item" style="background: #F1F8E9;">
+                            <div class="risk-badge risk-medium-low">RK02</div>
+                            <div class="risk-info">
+                                <div class="rk-label">中低风险</div>
+                                <div class="rk-desc">产品介绍、使用指南</div>
+                            </div>
+                            <div class="risk-action">✅ 自动发布 → S010</div>
+                        </div>
+                        
+                        <div class="risk-item" style="background: #FFF8E1;">
+                            <div class="risk-badge risk-medium">RK03</div>
+                            <div class="risk-info">
+                                <div class="rk-label">中风险</div>
+                                <div class="rk-desc">对比评测、行业分析</div>
+                            </div>
+                            <div class="risk-action">🟡 单级审批 → S009H</div>
+                        </div>
+                        
+                        <div class="risk-item" style="background: #FFE0B2;">
+                            <div class="risk-badge risk-medium-high">RK04</div>
+                            <div class="risk-info">
+                                <div class="rk-label">中高风险</div>
+                                <div class="rk-desc">技术指南、实操教程</div>
+                            </div>
+                            <div class="risk-action">🟡 两级审批 → S009H</div>
+                        </div>
+                        
+                        <div class="risk-item" style="background: #FFCDD2;">
+                            <div class="risk-badge risk-high">RK05</div>
+                            <div class="risk-info">
+                                <div class="rk-label">高风险</div>
+                                <div class="rk-desc">敏感话题、争议内容</div>
+                            </div>
+                            <div class="risk-action">🔴 三级审批+法务</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 核心产出物 -->
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">📦</span>
+                    核心产出物
+                </div>
+                
+                <div class="output-grid">
+                    <div class="output-card">
+                        <div class="output-icon">🔖</div>
+                        <div class="output-name">000 BID.json</div>
+                        <span class="output-format">JSON</span>
+                        <div class="output-desc">7层44点位标识，文章元数据</div>
+                    </div>
+                    
+                    <div class="output-card">
+                        <div class="output-icon">📋</div>
+                        <div class="output-name">001 启动确认.md</div>
+                        <span class="output-format">Markdown</span>
+                        <div class="output-desc">品牌配置、关键词、禁用词</div>
+                    </div>
+                    
+                    <div class="output-card">
+                        <div class="output-icon">📝</div>
+                        <div class="output-name">002 内容PRD.md</div>
+                        <span class="output-format">Markdown</span>
+                        <div class="output-desc">素材清单、内链候选</div>
+                    </div>
+                    
+                    <div class="output-card">
+                        <div class="output-icon">📐</div>
+                        <div class="output-name">003 文章结构.md</div>
+                        <span class="output-format">Markdown</span>
+                        <div class="output-desc">H2/H3大纲、SEO信息</div>
+                    </div>
+                    
+                    <div class="output-card">
+                        <div class="output-icon">📄</div>
+                        <div class="output-name">004 正文.md</div>
+                        <span class="output-format">Markdown</span>
+                        <div class="output-desc">完整英文正文、References</div>
+                    </div>
+                    
+                    <div class="output-card">
+                        <div class="output-icon">🏗️</div>
+                        <div class="output-name">005 字段化文档.html</div>
+                        <span class="output-format">HTML</span>
+                        <div class="output-desc">带data-field标记的结构化HTML</div>
+                    </div>
+                    
+                    <div class="output-card">
+                        <div class="output-icon">🎨</div>
+                        <div class="output-name">006 呈现文档.html</div>
+                        <span class="output-format">HTML</span>
+                        <div class="output-desc">完整独立页面（含SEO meta）</div>
+                    </div>
+                    
+                    <div class="output-card final">
+                        <div class="output-icon">⭐</div>
+                        <div class="output-name">007 发布包.md</div>
+                        <span class="output-format" style="background: #9C27B0; color: #fff;">最终交付</span>
+                        <div class="output-desc">Keyword/Title/Slug/Meta/HTML 7个代码块</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 关键节点说明 -->
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">🎯</span>
+                    关键节点详解
+                </div>
+                
+                <div class="flowchart">
+                    <div class="flow-phase">
+                        <div class="phase-header" style="background: linear-gradient(90deg, #f44336 0%, #d32f2f 100%);">🔴 高风险节点（必须人工审核）</div>
+                        <div class="phase-content">
+                            <div class="node risk">
+                                <span class="badge risk-badge">🔴</span>
+                                <div class="step-id">S009</div>
+                                <div class="step-name">Gate系统校验</div>
+                                <div class="step-output">• 禁用词检测<br/>• URL真实性验证<br/>• 品牌合规检查<br/>• 格式洁净度</div>
+                            </div>
+                            <div class="node risk">
+                                <span class="badge risk-badge">🔴</span>
+                                <div class="step-id">S009H</div>
+                                <div class="step-name">Gate人工审批</div>
+                                <div class="step-output">• RK≤02: 自动发布<br/>• RK03: 单级审批<br/>• RK04: 两级审批<br/>• RK05: 三级审批+法务</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">
+                        <div class="arrow-line"></div>
+                        <div class="arrow-head"></div>
+                    </div>
+                    
+                    <div class="flow-phase">
+                        <div class="phase-header" style="background: linear-gradient(90deg, #FF9800 0%, #F57C00 100%);">🟡 人工审核节点（关键决策点）</div>
+                        <div class="phase-content">
+                            <div class="node review">
+                                <span class="badge review-badge">🟡</span>
+                                <div class="step-id">S001H</div>
+                                <div class="step-name">BID审核</div>
+                                <div class="step-output">审核内容:<br/>• 关键词<br/>• 标题<br/>• 提示词<br/>• 重新推断</div>
+                            </div>
+                            <div class="node review">
+                                <span class="badge review-badge">🟡</span>
+                                <div class="step-id">S004H</div>
+                                <div class="step-name">正文审核</div>
+                                <div class="step-output">审核内容:<br/>• 内容修改<br/>• 结构调整<br/>• 风格修改<br/>• 重新写作</div>
+                            </div>
+                            <div class="node review">
+                                <span class="badge review-badge">🟡</span>
+                                <div class="step-id">S009H</div>
+                                <div class="step-name">Gate审批</div>
+                                <div class="step-output">审核内容:<br/>• 通过发布<br/>• 修改内容<br/>• 重新审核<br/>• 驳回终止</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>📊 Blog-Writer 社媒运营AI工作流架构图</p>
+            <p>最后更新：2026-07-28 | 配置驱动 · BID标识 · 智能审核 · 批量执行</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,110 @@
+{
+  "id": "step.blog.writer.field",
+  "seq": 5,
+  "name": "字段化",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "draft",
+        "path": "004 正文.md",
+        "desc": "004 正文.md（原始Markdown正文）"
+      },
+      {
+        "id": "structure",
+        "path": "003 文章结构.md",
+        "desc": "003 文章结构.md（H2/H3 + semantic_type）"
+      },
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识"
+      },
+      {
+        "id": "prd",
+        "path": "002 内容PRD.md",
+        "desc": "002 内容PRD.md（素材、attn_level）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.draft"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "保留原始正文的所有内容，不得删改",
+      "每个段落/列表/表格/引用都打 data-field 标记",
+      "每个 <section> 至少包含 data-field（对应 semantic_type）+ data-seq",
+      "每个 <p> 至少包含 data-field 标记字段类型"
+    ],
+    "forbidden": [
+      "增删原文段落或改写正文内容"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "生成字段化文档",
+      "workflow": "用 run_script 执行确定性字段化脚本（不要手写 HTML）：\n\n```\nrun_script(\"field_markup.py\", [\"--draft\", \"004 正文.md\", \"--structure\", \"003 文章结构.md\", \"--out\", \"005 字段化文档.html\", \"--out-dir\", \".\"])\n```\n\n等价命令：\n```bash\npython3 ../../tools/blog-writer/field_markup.py \\\n  --draft \"004 正文.md\" \\\n  --structure \"003 文章结构.md\" \\\n  --out \"005 字段化文档.html\"\n```\n\n脚本做的事情：\n1. 读取 004 正文.md（原始 Markdown 正文）\n2. 读取 003 文章结构.md（H2 的 semantic_type 映射）\n3. Markdown → HTML 转换（**bold**→<strong>、*italic*→<em>、链接、列表、表格、标题全部自动转换）\n4. 按 H2 分节（<section data-field=\"{type}\" data-seq=\"{NN}\">）\n5. 每段落打 data-field / data-seq 属性\n6. References 节完整保留，引用条目自动标记 data-field=\"reference\"\n7. FAQ <p><strong> 自动转换 <details class=\"faq-item\"> 折叠格式\n8. 验证写入\n\n脚本退出码非 0 或 stderr 不含 \"OK:\" → 写入失败。",
+      "output": {
+        "id": "field_html",
+        "name": "字段化文档",
+        "path": "005 字段化文档.html",
+        "template": {}
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "005 字段化文档.html 存在且非空",
+      "on_fail": "hard_fail",
+      "target": "file:005 字段化文档.html"
+    },
+    {
+      "id": 2,
+      "rule": "每个 <section> 有 data-field 属性",
+      "on_fail": "pass=false",
+      "target": "file:005 字段化文档.html"
+    },
+    {
+      "id": 3,
+      "rule": "每个 <p> 有 data-field 属性",
+      "on_fail": "pass=false",
+      "target": "file:005 字段化文档.html"
+    },
+    {
+      "id": 4,
+      "rule": "存在 <section> 标签且包含 data-field 属性",
+      "on_fail": "hard_fail",
+      "target": "file:005 字段化文档.html"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    }
+  }
+}

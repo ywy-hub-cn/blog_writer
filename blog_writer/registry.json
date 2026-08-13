@@ -1,0 +1,165 @@
+{
+  "name": "blog-writer",
+  "description": "通用博客写作：启动→BID→PRD→结构→正文→字段化→呈现→视觉素材→自审→Gate→发布包。品牌无关，BID驱动，每段data-field标记。支持auto/supervised/manual三种模式，关键节点人工审核，风险分级路由，批量任务调度。",
+  "step_order": [
+    "S000-startup.json",
+    "S001-bid-infer.json",
+    "S001H-human-review-bid.json",
+    "S002-content-prd.json",
+    "S003-structure.json",
+    "S004-draft.json",
+    "S004H-human-review-draft.json",
+    "S004-content-validate.json",
+    "S005-field.json",
+    "S006-preview.json",
+    "S007-visual.json",
+    "S008-review-draft.json",
+    "S009-gate.json",
+    "S009H-human-review-gate.json",
+    "S010-publish.json",
+    "S011-publish-wp.json"
+  ],
+  "max_steps": 30,
+  "default_model": "deepseek/deepseek-v4-flash",
+  "default_timeout": 600,
+  "mode_config": {
+    "auto": {
+      "description": "全自动模式，无人干预，适用于低风险标准化内容",
+      "skip_review": ["S001H-human-review-bid.json", "S004H-human-review-draft.json", "S009H-human-review-gate.json"]
+    },
+    "supervised": {
+      "description": "监督模式，关键节点人工审核，适用于中等风险内容",
+      "required_review": ["S001H-human-review-bid.json", "S004H-human-review-draft.json"],
+      "conditional_review": {
+        "S009H-human-review-gate.json": "risk_level >= 03"
+      }
+    },
+    "manual": {
+      "description": "手动模式，每步人工确认，适用于高风险敏感内容",
+      "required_review": ["S001H-human-review-bid.json", "S004H-human-review-draft.json", "S009H-human-review-gate.json"],
+      "step_confirmation": true
+    }
+  },
+  "risk_strategy": {
+    "RK01": { "level": "low", "description": "通用知识、教育内容", "action": "auto_publish" },
+    "RK02": { "level": "low-medium", "description": "产品介绍、使用指南", "action": "auto_publish_post_review" },
+    "RK03": { "level": "medium", "description": "对比评测、行业分析", "action": "human_review" },
+    "RK04": { "level": "medium-high", "description": "技术指南、实操教程", "action": "mandatory_approval" },
+    "RK05": { "level": "high", "description": "敏感话题、争议内容", "action": "multi_level_approval" }
+  },
+  "routing": {
+    "step.blog.writer.startup": {
+      "on_pass": "step.blog.writer.bid",
+      "on_fail": "step.blog.writer.startup",
+      "max_retries": 2
+    },
+    "step.blog.writer.bid": {
+      "on_pass": "step.blog.writer.human_review_bid",
+      "on_fail": "step.blog.writer.bid",
+      "max_retries": 3,
+      "mode_override": {
+        "auto": "step.blog.writer.prd"
+      }
+    },
+    "step.blog.writer.human_review_bid": {
+      "on_pass": "step.blog.writer.prd",
+      "on_fail": "step.blog.writer.bid",
+      "max_retries": 0,
+      "mode_override": {
+        "auto": null
+      }
+    },
+    "step.blog.writer.prd": {
+      "on_pass": "step.blog.writer.structure",
+      "on_fail": "step.blog.writer.prd",
+      "max_retries": 3
+    },
+    "step.blog.writer.structure": {
+      "on_pass": "step.blog.writer.draft",
+      "on_fail": "step.blog.writer.structure",
+      "max_retries": 3
+    },
+    "step.blog.writer.draft": {
+      "on_pass": "step.blog.writer.human_review_draft",
+      "on_fail": "step.blog.writer.draft",
+      "max_retries": 3,
+      "mode_override": {
+        "auto": "step.blog.writer.content_validate"
+      }
+    },
+    "step.blog.writer.human_review_draft": {
+      "on_pass": "step.blog.writer.content_validate",
+      "on_fail": "step.blog.writer.draft",
+      "max_retries": 0,
+      "mode_override": {
+        "auto": null
+      }
+    },
+    "step.blog.writer.content_validate": {
+      "on_pass": "step.blog.writer.field",
+      "on_fail": "step.blog.writer.draft",
+      "max_retries": 2
+    },
+    "step.blog.writer.field": {
+      "on_pass": "step.blog.writer.preview",
+      "on_fail": "step.blog.writer.field",
+      "max_retries": 3
+    },
+    "step.blog.writer.preview": {
+      "on_pass": "step.blog.writer.visual",
+      "on_fail": "step.blog.writer.preview",
+      "max_retries": 2
+    },
+    "step.blog.writer.visual": {
+      "on_pass": "step.blog.writer.review_draft",
+      "on_fail": "step.blog.writer.visual",
+      "max_retries": 2
+    },
+    "step.blog.writer.review_draft": {
+      "on_pass": "step.blog.writer.gate",
+      "on_fail": "step.blog.writer.draft",
+      "max_retries": 3
+    },
+    "step.blog.writer.gate": {
+      "on_pass": "step.blog.writer.human_review_gate",
+      "on_fail": "step.blog.writer.draft",
+      "max_retries": 2,
+      "mode_override": {
+        "auto": "step.blog.writer.publish",
+        "risk_based": {
+          "RK01": "step.blog.writer.publish",
+          "RK02": "step.blog.writer.publish"
+        }
+      }
+    },
+    "step.blog.writer.human_review_gate": {
+      "on_pass": "step.blog.writer.publish",
+      "on_fail": "step.blog.writer.draft",
+      "max_retries": 0,
+      "mode_override": {
+        "auto": null
+      },
+      "risk_based": {
+        "RK03": { "approval_level": "single" },
+        "RK04": { "approval_level": "multiple", "levels": 2 },
+        "RK05": { "approval_level": "multiple", "levels": 3, "require_legal": true }
+      }
+    },
+    "step.blog.writer.publish": {
+      "on_pass": "step.blog.writer.publish_wp",
+      "on_fail": "step.blog.writer.publish",
+      "max_retries": 1
+    },
+    "step.blog.writer.publish_wp": {
+      "on_pass": "",
+      "on_fail": "step.blog.writer.publish_wp",
+      "max_retries": 2
+    }
+  },
+  "batch_config": {
+    "batch_init": "S-BATCH-001-batch-init.json",
+    "batch_collect": "S-BATCH-002-batch-collect.json",
+    "max_parallel": 5,
+    "auto_retry": true
+  }
+}

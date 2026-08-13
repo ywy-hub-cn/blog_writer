@@ -1,0 +1,89 @@
+{
+  "id": "step.blog.writer.batch_init",
+  "seq": -1,
+  "name": "批量任务初始化",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "exec",
+      "spawn"
+    ],
+    "files": [
+      {
+        "id": "batch_config",
+        "path": "batch-config.json",
+        "desc": "批量任务配置文件，包含关键词列表和任务参数"
+      }
+    ]
+  },
+  "constraints": {
+    "must": [
+      "读取 batch-config.json 解析所有任务",
+      "为每个任务生成唯一实例ID",
+      "记录任务状态到 batch-status.json",
+      "并行 spawn 实例，不超过 max_parallel 限制"
+    ],
+    "forbidden": [
+      "跳过 batch-config.json 校验",
+      "无限制并行 spawn 导致资源耗尽"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "解析批量配置",
+      "workflow": "读取 batch-config.json，验证配置完整性：\n\n```bash\npython3 << 'PYEOF'\nimport json\nwith open('batch-config.json', encoding='utf-8') as f:\n    config = json.load(f)\n\nrequired = ['batch_id', 'name', 'mode', 'brand_path', 'tasks']\nmissing = [k for k in required if k not in config]\nif missing:\n    print(f'❌ 缺少必填字段: {missing}')\n    exit(1)\n\nif not isinstance(config['tasks'], list) or len(config['tasks']) == 0:\n    print('❌ tasks 必须是非空数组')\n    exit(1)\n\nfor i, task in enumerate(config['tasks']):\n    if 'task_id' not in task:\n        task['task_id'] = f'task-{i+1:03d}'\n    if 'keywords' not in task or not task['keywords']:\n        print(f'❌ task {task[\"task_id\"]} 缺少关键词')\n        exit(1)\n\nprint(f'✅ 配置验证通过')\nprint(f'   批次ID: {config[\"batch_id\"]}')\nprint(f'   任务数: {len(config[\"tasks\"])}')\nprint(f'   模式: {config[\"mode\"]}')\nprint(f'   品牌路径: {config[\"brand_path\"]}')\nPYEOF\n```\n\n验证通过后继续。",
+      "output": {
+        "id": "batch_config_validated",
+        "name": "验证后的批量配置",
+        "path": "batch-config.json",
+        "template": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "初始化批量状态跟踪",
+      "workflow": "创建 batch-status.json 用于跟踪所有任务进度：\n\n```bash\npython3 << 'PYEOF'\nimport json\nimport datetime\n\nwith open('batch-config.json', encoding='utf-8') as f:\n    config = json.load(f)\n\nstatus = {\n    'batch_id': config['batch_id'],\n    'name': config['name'],\n    'mode': config['mode'],\n    'brand_path': config['brand_path'],\n    'status': 'running',\n    'total_tasks': len(config['tasks']),\n    'completed_tasks': 0,\n    'pending_tasks': len(config['tasks']),\n    'review_tasks': 0,\n    'failed_tasks': 0,\n    'progress': 0,\n    'max_parallel': config.get('max_parallel', 3),\n    'auto_retry': config.get('auto_retry', True),\n    'tasks': [],\n    'started_at': datetime.datetime.now().isoformat(),\n    'estimated_completion': ''\n}\n\nfor task in config['tasks']:\n    instance_id = f\"blog-writer-{config['batch_id']}-{task['task_id']}\"\n    status['tasks'].append({\n        'task_id': task['task_id'],\n        'keywords': task['keywords'],\n        'user_note': task.get('user_note', ''),\n        'priority': task.get('priority', 'medium'),\n        'instance_id': instance_id,\n        'instance_path': f\"instance/{instance_id}\",\n        'status': 'pending',\n        'current_step': '',\n        'output_file': '',\n        'error': ''\n    })\n\nwith open('batch-status.json', 'w', encoding='utf-8') as f:\n    json.dump(status, f, indent=2, ensure_ascii=False)\n\nprint('✅ batch-status.json 已创建')\nPYEOF\n```",
+      "output": {
+        "id": "batch_status",
+        "name": "批量任务状态",
+        "path": "batch-status.json",
+        "template": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "并行启动任务实例",
+      "workflow": "根据 max_parallel 限制，并行 spawn 任务实例：\n\n```bash\npython3 << 'PYEOF'\nimport json\nimport subprocess\nimport time\nimport os\n\nwith open('batch-status.json', encoding='utf-8') as f:\n    status = json.load(f)\n\nmax_parallel = status['max_parallel']\npending_tasks = [t for t in status['tasks'] if t['status'] == 'pending']\n\nfor i, task in enumerate(pending_tasks[:max_parallel]):\n    cmd = [\n        'python3', '-m', 'orchestration',\n        '--method-path', '.method/blog-writer',\n        '--instance-path', task['instance_path'],\n        '--params', json.dumps({\n            'brand_path': status['brand_path'],\n            'keywords': task['keywords'],\n            'user_note': task.get('user_note', ''),\n            'mode': status['mode']\n        })\n    ]\n    \n    print(f'🚀 启动任务 {task[\"task_id\"]}: {task[\"keywords\"]}')\n    subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n    \n    with open('batch-status.json', 'r', encoding='utf-8') as f:\n        status = json.load(f)\n    for t in status['tasks']:\n        if t['task_id'] == task['task_id']:\n            t['status'] = 'running'\n            t['current_step'] = 'S000-startup'\n    with open('batch-status.json', 'w', encoding='utf-8') as f:\n        json.dump(status, f, indent=2, ensure_ascii=False)\n    \n    time.sleep(2)\n\nprint(f'✅ 已启动 {min(max_parallel, len(pending_tasks))} 个任务')\nPYEOF\n```\n\n启动后等待所有实例进入运行状态。"
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "batch-config.json 存在且包含有效任务列表",
+      "on_fail": "hard_fail",
+      "target": "file:batch-config.json"
+    },
+    {
+      "id": 2,
+      "rule": "batch-status.json 已创建且状态为 running",
+      "on_fail": "pass=false",
+      "target": "file:batch-status.json"
+    },
+    {
+      "id": 3,
+      "rule": "至少有一个任务已启动",
+      "on_fail": "pass=false",
+      "target": "step"
+    }
+  ],
+  "params": {
+    "batch_config_path": {
+      "type": "string",
+      "required": true,
+      "description": "批量配置文件路径"
+    }
+  }
+}

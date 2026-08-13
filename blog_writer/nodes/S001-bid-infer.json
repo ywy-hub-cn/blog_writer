@@ -1,0 +1,131 @@
+{
+  "id": "step.blog.writer.bid",
+  "seq": 1,
+  "name": "BID自动推断",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "web_search",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "startup",
+        "path": "001 启动确认.md",
+        "desc": "001 启动确认.md（关键词、附加要求、mode）"
+      },
+      {
+        "id": "bid_system",
+        "path": ".method/references/bid-system.md",
+        "desc": "BID 体系参考（7层40点位枚举值）"
+      },
+      {
+        "id": "bid_rules",
+        "path": ".method/references/bid-rules.md",
+        "desc": "BID 组合有效性 P0 硬约束"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.startup"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "推断所有 7 层 40 个点位",
+      "推断 BID 前先读 bid-system.md 了解各层含义和枚举值"
+    ],
+    "forbidden": [
+      "BID 点位留空未填写"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "搜集信息 + 推断 BID + 写入初稿",
+      "workflow": "读取 001 启动确认.md 获取关键词和附加要求。用 read 工具读取 .method/references/bid-system.md 完整内容，了解 BID 7层体系（CO·内容核心 / WB·业务目标 / SE·SEO / GE·GEO / CL·集群 / LO·语言 / ST·结构模板）。用 read 工具读取 .method/references/bid-rules.md 完整内容，了解 P0 硬约束。使用 web_search 搜索关键词的 SERP 现状、竞争内容、搜索意图。基于【关键词 + 附加要求 + 品牌信息 + SERP 分析】推断每层的枚举值。推断逻辑：\n- CO·CT（体裁）→ 根据关键词形态和用户预期选择\n- CO·DP（深度）+ CO·AL（受众水平）→ 根据话题复杂度和目标读者\n- SE·SI（搜索意图）+ SE·QS（查询形态）→ 根据 SERP 分析\n- GE·GI（AI引用角色）→ 根据文章定位\n- ST（结构模板）→ 根据 CT+GI 推荐\n- CL 层若无集群信息则设为独立模式（PI=00、SUB=\"00\"，其余字段填 \"N/A\" 或空字符串均可）\n- 其余字段根据关键词+品牌合理推断\n写入 000 BID.json（初稿，validation.passed 暂为 false）：\n{\n  \"bid\": {\n    \"core\": {\"at\": \"\", \"th\": \"\", \"pi\": \"\", \"ct\": \"\", \"pv\": \"\", \"pr\": \"\", \"al\": \"\", \"dp\": \"\", \"tm\": \"\", \"fm\": \"\", \"tn\": \"\", \"so\": \"\", \"ev\": \"\"},\n    \"web\": {\"obj\": \"\", \"uc\": \"\", \"js\": \"\", \"cta\": \"\", \"ci\": \"\", \"pm\": \"\", \"rk\": \"\"},\n    \"seo\": {\"si\": \"\", \"qs\": \"\", \"kl\": \"\", \"kc\": \"\", \"sf\": \"\", \"sc\": \"\", \"ic\": \"\"},\n    \"geo\": {\"gi\": \"\", \"gs\": \"\", \"gf\": \"\", \"gn\": \"\", \"gc\": \"\"},\n    \"cl\": {\"pi\": \"\", \"sub\": \"00\", \"cr\": \"\", \"il\": \"\", \"lt\": \"\", \"pf\": \"01\"},\n    \"lo\": \"01\",\n    \"st\": \"\"\n  },\n  \"summary\": {\n    \"title\": \"推断的文章标题\",\n    \"seo_title\": \"SEO标题（≤60字符，focus keyword在前50字符内，含数字如5/7/10，含情感词如Critical/Essential/Proven，含力量词如Ultimate/Powerful/Complete，不要和title完全一样）\",\n    \"slug\": \"推断的slug（包含focus keyword，≤50字符，连接符分隔，不含stop words）\",\n    \"keyword\": \"focus keyword\",\n    \"meta_description\": \"Meta描述（≤160字符，完整自然语句，包含focus keyword在前120字符内）\",\n    \"excerpt\": \"摘要（≤200字符）\",\n    \"structure_template_name\": \"模板中文名\",\n    \"tone\": \"语气描述\",\n    \"depth\": \"深度描述\",\n    \"audience\": \"受众描述\"\n  },\n  \"validation\": {\n    \"passed\": false,\n    \"issues\": []\n  }\n}",
+      "output": {
+        "id": "bid_draft",
+        "name": "BID标识初稿",
+        "path": "000 BID.json",
+        "template": {
+          "bid": {},
+          "summary": {
+            "title": "文章标题",
+            "slug": "文章slug",
+            "keyword": "focus keyword"
+          },
+          "validation": {
+            "passed": false
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "校验 P0 + 修正 + 确定性验证",
+      "workflow": "读取 000 BID.json（Action 1 产出）。用 read 工具读取 .method/references/bid-rules.md 完整内容，逐条校验 P0 硬约束。如有违反则调整对应点位值直到通过。校验通过后，在 001 启动确认.md 末尾追加 ## BID 节（含各层推断结果摘要）。\n\n然后 exec 确定性脚本校验 BID 合法性：\n```bash\npython3 ../../tools/blog-writer/validate_bid.py --out-dir .\n```\n\nvalidate_bid.py 执行内容：\n1. 读 000 BID.json → 提取所有 40 个点位值\n2. 读 .method/references/bid-system.md → 提取每个点位的合法枚举值\n3. 逐点校验：每个值是否是合法枚举值、是否为空\n4. 校验 meta_description 是否包含 focus keyword 精确短语，不包含则自动修正\n5. 有任意问题 → exit(1)，该步骤不通过\n\nvalidate_bid.py 通过后，用 exec 更新 000 BID.json 的 validation.passed 为 true：\n```bash\npython3 -c \"\nimport json\nwith open('000 BID.json') as f:\n    d = json.load(f)\nd['validation']['passed'] = True\nd['validation']['issues'] = []\nwith open('000 BID.json', 'w', encoding='utf-8') as f:\n    json.dump(d, f, indent=2, ensure_ascii=False)\nprint('✅ validation.passed 已设为 true')\n\"\n```\n\n校验通过后，验证 000 BID.json 的 validation.passed 是否为 true。",
+      "output": {
+        "id": "bid_validated",
+        "name": "BID标识（已校验）",
+        "path": "000 BID.json",
+        "template": {}
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "000 BID.json 存在且可读",
+      "on_fail": "hard_fail",
+      "target": "file:000 BID.json"
+    },
+    {
+      "id": 2,
+      "rule": "validation.passed = true",
+      "on_fail": "pass=false",
+      "target": "file:000 BID.json"
+    },
+    {
+      "id": 3,
+      "rule": "所有 7 层均有非空值（CL·PI=00 时 SUB/CR/IL/LT/PF 可用 \"N/A\" 或空字符串）",
+      "on_fail": "pass=false",
+      "target": "file:000 BID.json"
+    },
+    {
+      "id": 4,
+      "rule": "summary.title 和 summary.slug 均非空",
+      "on_fail": "hard_fail",
+      "target": "file:000 BID.json"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    },
+    "mode": {
+      "type": "string",
+      "default": "auto",
+      "enum": ["auto", "supervised", "manual"],
+      "description": "运行模式"
+    }
+  }
+}

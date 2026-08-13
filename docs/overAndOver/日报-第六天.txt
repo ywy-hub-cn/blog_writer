@@ -1,0 +1,44 @@
+工作日报 - 第六天（编码阶段：安全体系+认证+沙箱纵深）
+
+一、今日工作内容
+
+1. 完成安全防护模块编码：
+   - 实现输入数据脱敏工具（masking）：对日志和输出中的API Key、密码等敏感字段进行自动脱敏，支持预设关键词+正则匹配双策略。
+   - 完善路径安全模块：新增文件扩展名白名单、文件大小上限校验、路径遍历深度限制三项能力，防止文件上传/读取漏洞。
+   - 实现路径安全校验：`safe_basename` 拒绝分隔符/`..`，resolve + relative_to 防止路径穿越。
+
+2. 认证管理器升级（AuthManager）：
+   - 密码哈希从 HS256 JWT 改为 **bcrypt**：新密码使用 bcrypt 哈希存储，遗留 SHA256 哈希登录成功后自动升级。
+   - Token 生成与校验：支持 bcrypt 哈希校验、Token 过期清理、吊销列表。
+   - 改密后自动吊销全部会话：`revoke_all_tokens()` 清理内存 + StateStore 双写。
+
+3. SSO/OAuth2 加固：
+   - SSO 启用后默认拒绝本地 password-only 登录绕过，仅 `security.sso.allow_local_fallback=true` 时允许降级。
+   - SSO 模式下禁止修改本地管理员密码（返回 400）。
+   - SSO userinfo 失败返回 None 而非塌缩为 `unknown`，禁止匿名身份登录。
+   - SSO Session 双写 StateStore，支持跨进程恢复。
+
+4. 沙箱纵深防御：
+   - 新增 `agent/sandbox.py`：AST 拒绝 `os`/`sys`/dunder 等导入；`-I` 隔离 Python；cwd 限定为 instance_dir；环境变量白名单。
+   - PureCode / Agent `run_python` 共用沙箱策略：禁止 `os`/`sys` 导入，`open` 限制在 instance_dir。
+   - Agent 工具调用 `max_tool_calls` 上限 100，防止无限循环。
+
+5. 启动监控与可观测性建设：
+   - 实现基础指标采集器（MetricsCollector）：支持计数器（Counter）、仪表（Gauge）、直方图（Histogram）三类指标类型。
+   - 内置系统级指标：活跃任务数、总任务数、成功/失败任务数、API请求数、限流触发次数等。
+   - 提供/api/metrics指标查询端点，默认返回JSON格式，为后续Prometheus接入预留扩展接口。
+
+6. 接入统一日志框架：
+   - 调整全局日志格式为结构化模式，包含trace_id、task_id、module、level等字段，便于日志检索与聚合。
+   - 区分系统日志与任务日志：任务日志单独存储并与任务ID关联，支持单独查询与导出。
+
+二、发现的问题与解决
+
+- JWT Token被截获后可能存在重放风险：引入Token唯一标识（jti）并在服务端维护吊销列表，问题解决。
+- SSO 启用后仍可用本地密码绕过：默认拒绝本地登录，仅 `allow_local_fallback` 开启时允许。
+- Agent `run_python` 可 `import os` / 任意 `open`：对齐 PureCode 沙箱策略，禁 os/sys，open 限 instance_dir。
+- 配置热更新后 AuthProvider 仍用旧 SSO 开关：重置 AuthProvider 缓存。
+
+三、工作效果
+
+系统安全与可观测性基础能力搭建完成，bcrypt 密码哈希、SSO 加固、沙箱纵深三层防御就位。核心功能模块编码完成度约80%，具备单机部署运行条件。

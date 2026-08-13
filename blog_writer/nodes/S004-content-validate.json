@@ -1,0 +1,54 @@
+{
+  "id": "step.blog.writer.content_validate",
+  "seq": 4.5,
+  "name": "内容质量校验",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "draft",
+        "path": "004 正文.md",
+        "desc": "正文文档"
+      },
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识（含关键词）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.draft"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "此步骤只执行 validate_content.py 脚本，不修改任何文件"
+    ],
+    "forbidden": [
+      "修改 004 正文.md 或其他产出文件"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "内容质量校验",
+      "workflow": "exec 确定性脚本校验 004 正文.md 的内容质量：\n\n```bash\npython3 ../../tools/blog-writer/validate_content.py --dir {instance_path}\n```\n\n脚本校验内容：\n1. 标题与 BID 一致\n2. H2 数量 ≥ 4\n3. FAQ 模块存在\n4. References 存在且 ≥ 2 条\n5. References 无笼统概括（如 Industry knowledge）\n6. References 不含品牌自有域名\n7. Focus keyword 出现在前 100 词内且 ≥ 3 次\n8. 引用编号与 References 条目双向对应\n\n⚠️ 脚本失败 → 步骤失败。\n⚠️ 禁止在此步骤中修改任何产出文件。\n⚠️ 如果脚本报错，直接向用户报告错误内容，不自行修改正文。",
+      "output": {
+        "id": "validate_result",
+        "path": "004-validation.log",
+        "template": {}
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "004-validation.log 存在且包含 [OK]",
+      "on_fail": "hard_fail",
+      "target": "file:004-validation.log"
+    }
+  ]
+}

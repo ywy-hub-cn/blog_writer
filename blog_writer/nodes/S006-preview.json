@@ -1,0 +1,118 @@
+{
+  "id": "step.blog.writer.preview",
+  "seq": 6,
+  "name": "呈现文档",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "field",
+        "path": "005 字段化文档.html",
+        "desc": "字段化文档（data-field标记的结构化HTML）"
+      },
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识（title/slug/meta）"
+      },
+      {
+        "id": "prd",
+        "path": "002 内容PRD.md",
+        "desc": "内容PRD"
+      },
+      {
+        "id": "html_rules",
+        "path": ".method/references/html-rules.md",
+        "desc": "HTML输出规范（颜色系统、字体、FAQ/References/CTA结构、CSS）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.field"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "必须运行 generate_presentation.py，不得手写 HTML",
+      "字段化文档的所有 data-field 和 data-seq 属性完整保留",
+      "SEO meta 完整（title、description、OG、Twitter Card）"
+    ],
+    "forbidden": [
+      "修改正文内容",
+      "改变段落结构",
+      "嵌入 JSON-LD（由 WordPress 插件处理）",
+      "跳过脚本手写 HTML（所有脚本产出必须用 generate_presentation.py 生成）"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "生成呈现文档",
+      "workflow": "必须用 run_script 执行 generate_presentation.py，禁止手写 HTML。\n\n```\nrun_script(\"generate_presentation.py\", [\"--out-dir\", \".\", \"--brand-site-url\", \"{brand_site_url}\"])\n```\n\n等价命令：\n```bash\npython3 ../../tools/blog-writer/generate_presentation.py --out-dir . --brand-site-url \"{brand_site_url}\"\n```\n\n如果不知道 brand_site_url，先读 001 启动确认.md 的 ## 品牌官网 行获取。\n\n脚本执行后必须验证：006 呈现文档.html 包含 <h1>、read-time、data-field。\n\n⚠️ 禁止自行拼接 HTML。任何理由都不能手写。脚本报错就排查脚本，不手写替代。"
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "006 呈现文档.html 存在且非空",
+      "on_fail": "hard_fail",
+      "target": "file:006 呈现文档.html"
+    },
+    {
+      "id": 2,
+      "rule": "包含 <!DOCTYPE html>",
+      "on_fail": "hard_fail",
+      "target": "file:006 呈现文档.html"
+    },
+    {
+      "id": 3,
+      "rule": "包含 <h1>",
+      "on_fail": "hard_fail",
+      "target": "file:006 呈现文档.html"
+    },
+    {
+      "id": 4,
+      "rule": "包含 read-time",
+      "on_fail": "hard_fail",
+      "target": "file:006 呈现文档.html"
+    },
+    {
+      "id": 5,
+      "rule": "包含 data-field=",
+      "on_fail": "hard_fail",
+      "target": "file:006 呈现文档.html"
+    },
+    {
+      "id": 6,
+      "rule": "包含 data-seq=",
+      "on_fail": "hard_fail",
+      "target": "file:006 呈现文档.html"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    }
+  }
+}

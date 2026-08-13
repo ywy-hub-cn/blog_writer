@@ -1,0 +1,179 @@
+{
+  "id": "step.blog.writer.publish",
+  "seq": 10,
+  "name": "发布包",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "web_search",
+      "web_fetch",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "startup",
+        "path": "001 启动确认.md",
+        "desc": "启动确认（含品牌官网 URL）"
+      },
+      {
+        "id": "preview",
+        "path": "006 呈现文档.html",
+        "desc": "呈现文档"
+      },
+      {
+        "id": "prd",
+        "path": "002 内容PRD.md",
+        "desc": "内容PRD（含内链候选+keyword/title/slug/meta）"
+      },
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识"
+      },
+      {
+        "id": "html_rules",
+        "path": ".method/references/html-rules.md",
+        "desc": "HTML输出规范"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.gate"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "输出严格按照下方模板，不增不减不改格式",
+      "每个字段独立代码框",
+      "Final article body 输出为 html 代码框",
+      "保留 data-field 和 data-seq 属性",
+      "外层加 article itemscope 壳",
+      "不嵌入 JSON-LD",
+      "SEO title ≤ 60 字符，包含 focus keyword 在前 50 字符内",
+      "SEO title 必须包含数字（如 5/7/10）",
+      "SEO title 必须包含情感词（positive/negative，如 Critical / Essential / Proven）",
+      "SEO title 必须包含力量词（power word，如 Ultimate / Powerful / Complete）",
+      "Meta description ≤ 160 英文字符（空格标点全部计入），完整自然语句不以...结尾",
+      "Slug 必须包含 focus keyword",
+      "007 发布包.md 的内容必须由 assemble_publish.py 脚本生成，LLM 不得手动写入或修改。所有参数修改（如 SEO title、Meta 调整）必须通过修改 BID JSON 后重跑脚本实现",
+      "执行前必须删除已存在的 007 发布包.md（如有），确保不混入旧内容",
+      "脚本执行后必须验证文件格式：第一行必须是 '### Keyword'，一共 7 个 ### 三级标题"
+    ],
+    "forbidden": [
+      "输出模板之外的任何额外标题或字段",
+      "输出 H1、发布日期、分类标签、自建目录",
+      "混入评审痕迹或 Agent 过程说明",
+      "写入 007 发布包.md 之外的任何额外文件（如中间HTML片段、prompt文本、临时文件等）",
+      "LLM 手动写入或编辑 007 发布包.md 的任何内容——该文件只由脚本写入",
+      "在脚本未执行或执行失败的情况下手动补写 007 发布包.md"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "查找内链",
+      "workflow": "从 000 BID.json 读取文章主关键词、搜索意图、集群信息。从 001 启动确认.md 的 ## 品牌官网 行读取 brand_site_url。如果未找到，提示用户输入。\n\n首先 web_fetch {brand_site_url}/category/blog/ 获取站内文章列表（或用户指定品牌域名的博客列表页）。\n如果失败，web_search site:{brand_domain} 当前主关键词。\n\n筛选规则：\n- 优选：更基础解释/更深入诊断/下一步行动/同集群不同意图\n- 禁用：争夺同一主关键词/同一意图/高度重复/cannibalization/弱相关/可能404\n\n选 2-4 篇，记录锚文本、URL、插入位置、选择原因。\n\n错误处理：\n- 抓取失败：说明失败原因和尝试过的URL，要求用户提供内链，不得静默跳过\n- 无合适内链：说明理由，等待用户确认\n- 除非用户明确说不加，否则至少嵌入 1 条\n\n写入 002 内容PRD.md 的 ## 内链候选 节。",
+      "output": {
+        "id": "links",
+        "name": "内链候选",
+        "path": "002 内容PRD.md",
+        "template": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "组装发布包",
+      "workflow": "## 绝对规则：007 发布包.md 必须由脚本生成，LLM 不得手动写入任何内容\n\n### 步骤 1：删除旧文件（如有）\n```bash\nrm -f 007 发布包.md 007 发布包.json\n```\n\n### 步骤 2：从 BID JSON 提取参数\n用 read 读取 000 BID.json，提取 keyword、title、slug、meta_description。\n用 read 从 001 启动确认.md 的 ## 品牌官网 行读取 brand_site_url（无则留空）。\n\n### 步骤 3：exec 脚本（必须执行，不得跳过）\n```bash\npython3 ../../tools/blog-writer/assemble_publish.py \\\n  --out-dir . \\\n  --brand-site-url \"{brand_site_url}\" \\\n  --keyword \"{keyword}\" \\\n  --title \"{title}\" \\\n  --slug \"{slug}\" \\\n  --meta-description \"{meta_description}\"\n```\n\n### 步骤 4：验证脚本产出格式（硬性）\n用 read 读取 007 发布包.md 的前 10 行，确认：\n- 第一行是 '### Keyword'（精确匹配，含 ### 和空格）\n- 第二行是空行\n- 第三行是 '```text'\n- 总共包含 7 个 ### 段落：Keyword / Title / SEO title / Slug / Meta description / Excerpt / Final article body\n- 每个段落之间无多余文本混入\n\n**格式验证不通过时，重新执行步骤 2-3，LLM 不得手动修正格式。**\n\n脚本做的事情（供参考，LLM 不需要重做）：\n1. 读 000 BID.json → 提取 keyword/title/slug/meta_description\n2. 读 001 启动确认.md → 提取 brand_site_url\n3. 读 006 呈现文档.html → 提取 blog-content 内的 HTML\n4. 按固定模板组装 Final article body（article itemscope 壳）\n5. 检测是否含 Mermaid → 自动注入 CDN\n6. 截断 meta description 到 160 字符\n7. 写入 007 发布包.md",
+      "output": {
+        "id": "publish_package",
+        "name": "发布包",
+        "path": "007 发布包.md",
+        "template": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Rank Math 合规校验",
+      "workflow": "\nexec 校验发布包的 Rank Math 合规性：\n1. 读取 007 发布包.md 的标题字段\n2. 校验 SEO title ≤ 60 字符（否则警告用户手动缩短）\n3. 校验 Meta description ≤ 160 字符且完整（不以 ... 结尾）\n4. 校验 Meta description 包含 focus keyword\n5. 校验 Slug 包含 focus keyword\n6. 输出校验结果到控制台\n\n```bash\npython3 ../../tools/blog-writer/check_rankmath.py --out-dir .\n```\n\n如果发现问题，输出明确的修改建议给用户。\n      "
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "Keyword 代码框非空",
+      "on_fail": "hard_fail",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 2,
+      "rule": "Final article body html 代码框非空",
+      "on_fail": "hard_fail",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 3,
+      "rule": "不包含 JSON-LD",
+      "on_fail": "pass=false",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 4,
+      "rule": "Final article body 的 HTML 代码框内包含至少 1 个 data-field 属性（在 html 代码框中搜索 data-field=）",
+      "on_fail": "pass=false",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 5,
+      "rule": "没有多余的标题字段（只有 Keyword/Title/SEO title/Slug/Meta description/Excerpt/Final article body）",
+      "on_fail": "pass=false",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 6,
+      "rule": "Meta description ≤ 160 字符（含空格标点）",
+      "on_fail": "pass=false",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 7,
+      "rule": "存在 Final article body 代码框",
+      "on_fail": "hard_fail",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 8,
+      "rule": "Final article body 的 HTML 中包含 <section> 标签（确保段落结构完整保留，不是从头重写的扁平 HTML）",
+      "on_fail": "pass=false",
+      "target": "file:007 发布包.md"
+    },
+    {
+      "id": 9,
+      "rule": "007 发布包.md 的格式必须与 assemble_publish.py 脚本产出完全一致：第一行是 '### Keyword'，之后是空行 + ```text 代码块，然后 '### Title'，依此类推。总共 7 个 ### 三级标题 + 7 个代码块。文件不得包含脚本模板之外的任何多余文本、表格、列表或注释。",
+      "on_fail": "hard_fail",
+      "target": "file:007 发布包.md"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    }
+  }
+}

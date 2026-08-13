@@ -1,0 +1,87 @@
+{
+  "id": "step.blog.writer.batch_collect",
+  "seq": 12,
+  "name": "批量结果汇总",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "batch_status",
+        "path": "batch-status.json",
+        "desc": "批量任务状态跟踪文件"
+      },
+      {
+        "id": "batch_config",
+        "path": "batch-config.json",
+        "desc": "批量任务配置文件"
+      }
+    ]
+  },
+  "constraints": {
+    "must": [
+      "读取所有实例的最终产出",
+      "更新 batch-status.json 状态",
+      "生成汇总报告",
+      "统计成功/失败/待审核数量"
+    ],
+    "forbidden": [
+      "跳过未完成任务的状态检查",
+      "不生成汇总报告"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "收集任务状态",
+      "workflow": "扫描所有实例目录，收集任务状态：\n\n```bash\npython3 << 'PYEOF'\nimport json\nimport os\nimport datetime\n\nwith open('batch-status.json', encoding='utf-8') as f:\n    status = json.load(f)\n\ncompleted = 0\nfailed = 0\nreview = 0\npending = 0\n\nfor task in status['tasks']:\n    instance_path = task['instance_path']\n    if not os.path.exists(instance_path):\n        task['status'] = 'failed'\n        task['error'] = '实例目录不存在'\n        failed += 1\n        continue\n    \n    publish_file = os.path.join(instance_path, '010 发布包.md')\n    draft_file = os.path.join(instance_path, '004 正文.md')\n    gate_file = os.path.join(instance_path, '009 Gate结果.md')\n    \n    if os.path.exists(publish_file):\n        task['status'] = 'completed'\n        task['output_file'] = publish_file\n        task['current_step'] = 'S010-publish'\n        completed += 1\n    elif os.path.exists(gate_file):\n        with open(gate_file, encoding='utf-8') as f:\n            gate_content = f.read()\n        if 'passed: true' in gate_content:\n            task['status'] = 'pending_review'\n            task['current_step'] = 'S009H-human-review-gate'\n            review += 1\n        else:\n            task['status'] = 'failed'\n            task['error'] = 'Gate校验未通过'\n            failed += 1\n    elif os.path.exists(draft_file):\n        task['status'] = 'pending_review'\n        task['current_step'] = 'S004H-human-review-draft'\n        review += 1\n    else:\n        task['status'] = 'running'\n        pending += 1\n\nstatus['completed_tasks'] = completed\nstatus['failed_tasks'] = failed\nstatus['review_tasks'] = review\nstatus['pending_tasks'] = pending\nstatus['progress'] = int((completed / status['total_tasks']) * 100)\n\nif completed + failed == status['total_tasks']:\n    status['status'] = 'completed'\n    status['finished_at'] = datetime.datetime.now().isoformat()\n\nwith open('batch-status.json', 'w', encoding='utf-8') as f:\n    json.dump(status, f, indent=2, ensure_ascii=False)\n\nprint(f'📊 状态汇总:')\nprint(f'   完成: {completed}')\nprint(f'   失败: {failed}')\nprint(f'   待审核: {review}')\nprint(f'   进行中: {pending}')\nprint(f'   进度: {status[\"progress\"]}%')\nPYEOF\n```",
+      "output": {
+        "id": "batch_status_updated",
+        "name": "更新后的批量任务状态",
+        "path": "batch-status.json",
+        "template": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "生成汇总报告",
+      "workflow": "生成批量任务汇总报告：\n\n```bash\npython3 << 'PYEOF'\nimport json\nimport datetime\n\nwith open('batch-status.json', encoding='utf-8') as f:\n    status = json.load(f)\n\nwith open('batch-config.json', encoding='utf-8') as f:\n    config = json.load(f)\n\nreport = f\"\"\"# 批量任务汇总报告\n\n## 基本信息\n- **批次ID**: {status['batch_id']}\n- **批次名称**: {status['name']}\n- **运行模式**: {status['mode']}\n- **品牌路径**: {status['brand_path']}\n- **开始时间**: {status['started_at']}\n\"\"\"\n\nif 'finished_at' in status:\n    report += f\"- **完成时间**: {status['finished_at']}\\n\"\n\nreport += f\"\"\"\n## 统计摘要\n\n| 状态 | 数量 | 占比 |\n|------|------|------|\n| ✅ 完成 | {status['completed_tasks']} | {int(status['completed_tasks']/status['total_tasks']*100)}% |\n| ❌ 失败 | {status['failed_tasks']} | {int(status['failed_tasks']/status['total_tasks']*100)}% |\n| ⏳ 待审核 | {status['review_tasks']} | {int(status['review_tasks']/status['total_tasks']*100)}% |\n| 🔄 进行中 | {status['pending_tasks']} | {int(status['pending_tasks']/status['total_tasks']*100)}% |\n\n## 任务详情\n\n\"\"\"\n\nfor task in status['tasks']:\n    status_icon = {\n        'completed': '✅',\n        'failed': '❌',\n        'pending_review': '⏳',\n        'running': '🔄',\n        'pending': '⏸'\n    }.get(task['status'], '❓')\n    \n    report += f\"\"\"### {status_icon} {task['task_id']}\n\n| 属性 | 值 |\n|------|-----|\n| **关键词**: | {task['keywords']} |\n| **状态**: | {task['status']} |\n| **当前步骤**: | {task['current_step']} |\n| **优先级**: | {task.get('priority', 'medium')} |\n\"\"\"\n    \n    if task.get('user_note'):\n        report += f\"| **备注**: | {task['user_note']} |\\n\"\n    \n    if task.get('output_file'):\n        report += f\"| **产出文件**: | {task['output_file']} |\\n\"\n    \n    if task.get('error'):\n        report += f\"| **错误信息**: | {task['error']} |\\n\"\n    \n    report += \"\\n\"\n\nreport += f\"\"\"\n## 操作建议\n\n\"\"\"\n\nif status['review_tasks'] > 0:\n    report += f\"- 📋 有 {status['review_tasks']} 个任务等待人工审核\"\n    report += f\"- 请进入以下实例完成审核:\\n\"\n    for task in status['tasks']:\n        if task['status'] == 'pending_review':\n            report += f\"  - {task['instance_path']} ({task['keywords']})\\n\"\n\nif status['failed_tasks'] > 0:\n    report += f\"\\n- ❌ 有 {status['failed_tasks']} 个任务失败\"\n    report += f\"- 请检查失败任务的错误信息并决定是否重试\\n\"\n\nif status['status'] == 'completed':\n    report += f\"\\n🎉 批量任务已全部完成！\"\n\nreport_path = f\"batch-report-{status['batch_id']}.md\"\nwith open(report_path, 'w', encoding='utf-8') as f:\n    f.write(report)\n\nprint(f'✅ 汇总报告已生成: {report_path}')\nPYEOF\n```",
+      "output": {
+        "id": "batch_report",
+        "name": "批量任务汇总报告",
+        "path": "batch-report-{batch_id}.md",
+        "template": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "输出汇总摘要",
+      "workflow": "输出简洁的汇总摘要供用户查看：\n\n```bash\npython3 << 'PYEOF'\nimport json\n\nwith open('batch-status.json', encoding='utf-8') as f:\n    status = json.load(f)\n\nprint(f\"\"\"\n═══════════════════════════════════════════\n📦 批量任务汇总 - {status['name']}\n═══════════════════════════════════════════\n\n📊 统计:\n  总任务: {status['total_tasks']}\n  ✅ 完成: {status['completed_tasks']}\n  ❌ 失败: {status['failed_tasks']}\n  ⏳ 待审核: {status['review_tasks']}\n  🔄 进行中: {status['pending_tasks']}\n  📈 进度: {status['progress']}%\n\n\"\"\")\n\nif status['review_tasks'] > 0:\n    print(\"⚠️ 需要人工审核的任务:\")\n    for task in status['tasks']:\n        if task['status'] == 'pending_review':\n            print(f\"   - {task['task_id']}: {task['keywords'][:50]}...\")\n\nif status['failed_tasks'] > 0:\n    print(\"\\n❌ 失败任务:\")\n    for task in status['tasks']:\n        if task['status'] == 'failed':\n            print(f\"   - {task['task_id']}: {task.get('error', '未知错误')}\")\n\nprint(f\"\\n📄 完整报告: batch-report-{status['batch_id']}.md\")\nprint(f\"\\n═══════════════════════════════════════════\")\nPYEOF\n```"
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "batch-status.json 存在且可读",
+      "on_fail": "hard_fail",
+      "target": "file:batch-status.json"
+    },
+    {
+      "id": 2,
+      "rule": "汇总报告已生成",
+      "on_fail": "pass=false",
+      "target": "step"
+    },
+    {
+      "id": 3,
+      "rule": "所有任务状态已更新",
+      "on_fail": "warn",
+      "target": "step"
+    }
+  ],
+  "params": {}
+}

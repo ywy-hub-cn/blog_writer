@@ -1,0 +1,94 @@
+{
+  "id": "step.blog.writer.human_review_gate",
+  "seq": 9.5,
+  "name": "Gate人工审批",
+  "kind": "human_review",
+  "resources": {
+    "allow": [
+      "read",
+      "write"
+    ],
+    "files": [
+      {
+        "id": "gate_result",
+        "path": "009 Gate结果.md",
+        "desc": "Gate校验结果"
+      },
+      {
+        "id": "preview",
+        "path": "006 呈现文档.html",
+        "desc": "呈现文档预览"
+      },
+      {
+        "id": "draft",
+        "path": "004 正文.md",
+        "desc": "正文文档"
+      },
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识（含风险等级RK）"
+      },
+      {
+        "id": "review_result",
+        "path": "008 自审结果.md",
+        "desc": "AI自审结果"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.gate"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "展示Gate校验结果和风险等级",
+      "高风险内容(RK≥04)必须人工审批",
+      "提供发布、修改、驳回的选项",
+      "记录审批决策日志",
+      "多级审批时记录审批层级"
+    ],
+    "forbidden": [
+      "高风险内容跳过人工审批",
+      "不记录审批决策"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "展示审批信息",
+      "workflow": "读取 009 Gate结果.md、000 BID.json、008 自审结果.md，提取并展示以下信息：\n\n## 📋 Gate人工审批\n\n### 当前状态\n- **标题**: {文章标题}\n- **关键词**: {BID.summary.keyword}\n- **风险等级**: {RK值对应等级}\n- **Gate结果**: {passed/failed}\n\n### Gate校验清单\n- [ ] 首屏与定位: {hook}\n- [ ] 结构与可读性: {structure}\n- [ ] 内容质量: {quality}\n- [ ] SEO一致性: {seo}\n- [ ] 格式洁净度: {clean}\n\n### AI自审评分\n- **总分**: {total_score}/100\n\n### 风险评估\n- **风险等级**: {RK值对应等级}\n- **风险描述**: {根据RK值的风险说明}\n- **审批要求**: {单级/多级审批}\n\n### 合规检查\n- [ ] 禁用词检测: {结果}\n- [ ] 品牌合规: {结果}\n- [ ] URL真实性: {结果}\n- [ ] 引用可信度: {结果}\n\n### 🎯 操作选项\n1. ✓ 通过发布 — 确认文章，进入发布包阶段\n2. ✏ 修改内容 — 编辑正文，重跑正文写作\n3. ✏ 修改标题 — 调整文章标题和SEO标题\n4. 🔄 重新审核 — 返回自审阶段\n5. ❌ 驳回 — 终止任务\n\n### 📝 修改输入\n请选择操作后填写修改内容：\n___________________________\n\n[确认并发布] [修改并返回]"
+    },
+    {
+      "id": 2,
+      "name": "处理审批决策",
+      "workflow": "根据人工选择的操作执行：\n\n**选项1: 通过发布**\n- 写入审批日志\n- 进入 S010 发布包\n- 如果RK≥04，标记为多级审批通过\n\n**选项2: 修改内容**\n- 更新 004 正文.md\n- 返回 S004 重新写作\n\n**选项3: 修改标题**\n- 更新 000 BID.json 中的 title、seo_title、slug\n- 更新 004 正文.md 的标题\n- 返回 S008 自审\n\n**选项4: 重新审核**\n- 返回 S008 自审\n\n**选项5: 驳回**\n- 写入审批日志（驳回原因）\n- 终止任务\n\n无论选择哪种操作，都需写入审批日志：\n\n```bash\npython3 -c \"\nimport json\nimport datetime\n\nlog = {\n    'review_id': 'review-gate-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S'),\n    'step_id': 'step.blog.writer.human_review_gate',\n    'timestamp': datetime.datetime.now().isoformat(),\n    'action': '{用户选择的操作}',\n    'risk_level': '{风险等级}',\n    'approval_level': '{单级/多级}',\n    'data_before': {{\n        'title': '{原标题}',\n        'gate_passed': '{原Gate结果}',\n        'score': '{原总分}'\n    }},\n    'comments': '{用户备注}'\n}\n\nwith open('009H 审批日志.md', 'a', encoding='utf-8') as f:\n    f.write(f'## Gate审批日志 - {log[\\\"timestamp\\\"]}\\n')\n    f.write(f'- 操作: {log[\\\"action\\\"]}\\n')\n    f.write(f'- 风险等级: {log[\\\"risk_level\\\"]}\\n')\n    f.write(f'- 审批层级: {log[\\\"approval_level\\\"]}\\n')\n    f.write(f'- 备注: {log[\\\"comments\\\"]}\\n')\n\"\n```"
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "审批日志文件存在",
+      "on_fail": "warn",
+      "target": "file:009H 审批日志.md"
+    },
+    {
+      "id": 2,
+      "rule": "009 Gate结果.md 存在且 passed = true",
+      "on_fail": "pass=false",
+      "target": "file:009 Gate结果.md"
+    },
+    {
+      "id": 3,
+      "rule": "高风险内容(RK≥04)必须有人工审批记录",
+      "on_fail": "hard_fail",
+      "target": "step"
+    }
+  ],
+  "params": {
+    "mode": {
+      "type": "string",
+      "default": "auto",
+      "description": "运行模式: auto(自动), supervised(关键节点审核), manual(每步确认)"
+    }
+  }
+}

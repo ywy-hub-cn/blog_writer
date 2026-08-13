@@ -1,0 +1,108 @@
+{
+  "id": "step.blog.writer.startup",
+  "seq": 0,
+  "name": "启动初始化",
+  "exec_type": "agent_action",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "brand_format",
+        "path": "references/brand-files-format.md",
+        "desc": "品牌文件格式规范（用户文档，S000 按文件名关键词识别角色）"
+      },
+      {
+        "id": "brand_template",
+        "path": "references/brand-template.md",
+        "desc": "品牌文件模板参考（用户文档，列出推荐文件名和被读步骤）"
+      }
+    ]
+  },
+  "constraints": {
+    "must": [
+      "brand_path 目录必须存在且可读",
+      "关键词非空",
+      "user_note 如果包含表格/多行/多主题内容，必须先执行关键词过滤步骤，只保留与 keywords 匹配的行/段"
+    ],
+    "forbidden": [
+      "跳过 brand_path 校验",
+      "产出不得直接写入 instance/assets/ 或 instance/assets/已发布/ 目录。所有实例必须通过 orchestration 调度执行，产出放在 instance/ 下，等待用户确认后使用 tools/asset_manager.py move-to-assets 移入"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "过滤 user_note（防止表格中其他行污染）",
+      "workflow": "## Orchestration 门禁检查\n_orchestrated 参数必须存在且为 true，否则此 workflow 不允许执行。\n如果 _orchestrated 不满足条件，不要执行下面的任何步骤，直接回复：\n❌ 此方法必须通过 orchestration 调度执行。请使用 sessions_spawn 指定 method_path。\n确保 user_note 只包含与目标 keywords 相关的内容。\n\n如果 user_note 包含表格（markdown 表格或含 | 的行），执行以下过滤：\n\n```bash\npython3 -c \"\nimport re, json\n\nkeywords = '{keywords}'\nuser_note = '''{user_note}'''\n\n# 如果是表格或多行内容，按关键词拆分\nlines = user_note.split('\\n')\nfiltered = []\nkeep_current = False\nfor line in lines:\n    # 表格行 | 或 以 - 开头的分割行\n    if '|' in line:\n        # 检查行是否包含一个关键词词根\n        kw_parts = keywords.lower().split(',')\n        for kw in kw_parts:\n            kw = kw.strip()\n            if kw and kw in line.lower():\n                filtered.append(line)\n                keep_current = True\n                break\n            else:\n                keep_current = False\n    else:\n        # 非表格行，保留上下文（表格前后的说明行）\n        if keep_current or not line.startswith('|'):\n            filtered.append(line)\n\n# 如果过滤后为空，回退到原始 user_note\noutput = '\\n'.join(filtered) if any('|' in x for x in filtered) else user_note\nprint(output)\n\" > .user_note_filtered.txt\n\n# 将过滤后的内容写回 user_note 用于下一步\nexport FILTERED_NOTE=$(cat .user_note_filtered.txt)\n```\n\n过滤完成后，后续命令使用过滤后的 user_note 内容。"
+    },
+    {
+      "id": 2,
+      "name": "初始化实例",
+      "workflow": "用 run_script 执行确定性初始化脚本，不依赖 LLM 判断。\n\n```\nrun_script(\"setup_brand.py\", [\"--brand-path\", \"{brand_path}\", \"--keywords\", \"{keywords}\", \"--out-dir\", \".\", \"--user-note\", \"{user_note}\", \"--brand-site-url\", \"{brand_site_url}\", \"--forbidden-whitelist\", \"{forbidden_whitelist_csv}\"])\n```\n\n等价命令：\n```bash\npython3 ../../tools/blog-writer/setup_brand.py \\\n  --brand-path {brand_path} \\\n  --keywords \"{keywords}\" \\\n  --out-dir . \\\n  --user-note \"{user_note}\" \\\n  --brand-site-url \"{brand_site_url}\" \\\n  --forbidden-whitelist \"{forbidden_whitelist_csv}\"\n```\n\n若 Task Parameters 中 forbidden_whitelist / forbidden_whitelist_csv 非空，必须原样传入 --forbidden-whitelist（逗号分隔）。脚本会写入 `## 本次禁用词白名单` 与 `forbidden_whitelist.json`，仅本任务生效。\n\n脚本执行内容（不需要 LLM 做任何额外判断）：\n1. 校验 brand_path 存在\n2. 复制所有 .md 文件到 brand/ 目录\n3. 按正则匹配文件名→推断角色（代码里硬编码的规则）\n4. 写入 brand/manifest.json\n5. 用 Python file.read() 读取每个文件的完整原文（无截断风险）\n6. 从品牌知识文件内容中提取 URL（正则匹配）\n7. 写入 001 启动确认.md，含所有原文节\n\n脚本退出码非 0 → 失败。脚本无输出或输出异常 → 失败。\n脚本成功后，验证 001 启动确认.md 存在且包含 ## 关键词 行。",
+      "output": {
+        "id": "startup",
+        "name": "启动确认",
+        "path": "001 启动确认.md",
+        "template": {
+          "mode": "free",
+          "keywords": "",
+          "user_note": "",
+          "brand_site_url": ""
+        }
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "001 启动确认.md 存在且包含 ## 关键词",
+      "on_fail": "hard_fail",
+      "target": "file:001 启动确认.md"
+    },
+    {
+      "id": 2,
+      "rule": "品牌目录至少有一个 .md 文件",
+      "on_fail": "hard_fail",
+      "target": "step"
+    },
+    {
+      "id": 3,
+      "rule": "brand/manifest.json 存在",
+      "on_fail": "hard_fail",
+      "target": "file:brand/manifest.json"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，可选。如果未提供，S000 会从品牌知识库文件自动提取。"
+    },
+    "mode": {
+      "type": "string",
+      "default": "auto",
+      "enum": ["auto", "supervised", "manual"],
+      "description": "运行模式: auto(全自动), supervised(关键节点审核), manual(每步确认)"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+工作日报 - 第五天（编码阶段：数据持久化+状态外置+请求限流）
+
+一、今日工作内容
+
+1. 完成数据持久化模块编码：
+   - 基于SQLAlchemy实现数据库抽象层，支持SQLite默认、PostgreSQL可选双引擎切换。
+   - 设计并实现三张核心表：tasks表存储任务主信息、task_logs表存储任务运行日志、workflow_state表存储节点级状态快照。
+   - 实现数据库优先、文件系统降级的双写策略：数据库写入成功则跳过文件持久化，数据库不可用时自动降级为本地JSON文件写入，后续支持同步回补。
+
+2. Redis 状态外置：
+   - 新增 state_store 模块，支持 Memory / Redis 双后端，Token 与 Webhook 回调注册可通过 Redis 持久化。
+   - 实现 _persist_token fail-closed 机制：Redis 写入失败时拒绝登录，避免分布式环境下口令不一致。
+   - SSO Session 双写：内存 + StateStore 同步，重启后可恢复。
+
+3. 数据库 UPSERT 修复与增强：
+   - SQLite UPSERT 从 `OR REPLACE` 改为 `ON CONFLICT DO UPDATE`，避免级联删除日志。
+   - PostgreSQL/MySQL UPSERT 补齐 `user_note`、`brand_site_url` 字段，修复续跑/重跑时数据丢失。
+   - 新增 `_Upsert_COLUMNS` / `_UPSERT_PK` 常量定义，统一多库方言。
+
+4. 实现请求限流保护模块：
+   - 采用令牌桶算法实现两层次限流：全局限流（默认20 req/s）+ 单客户端限流（默认10 req/60s），防止恶意刷接口。
+   - 支持按IP、按用户、按接口三种维度限流，限流配置可通过配置文件动态调整。
+   - 超限返回标准429状态码并附带详细提示信息，记录限流日志用于审计分析。
+   - 限流审计新增专用表 `rate_limit_audit`，记录客户端、端点、全局三类桶的消耗情况。
+
+5. 完成任务状态管理API：
+   - 实现任务启动、暂停、恢复、取消、状态查询、日志查询共6个核心API。
+   - 每个API接入限流保护和参数校验，异常情况返回结构化错误信息。
+   - 新增 `pre_register_task` 预注册机制，解决启动后立即查询 404 竞态问题。
+
+二、发现的问题与解决
+
+- 发现数据库连接池资源在高并发下可能耗尽：调整连接池参数并添加连接超时释放机制，问题解决。
+- Redis Token 写入失败仍登录成功：改为 fail-closed，Redis 不可用时拒绝登录。
+- SQLite `OR REPLACE` 级联删除日志：改用 `ON CONFLICT DO UPDATE` UPSERT 语法。
+- PG/MySQL UPSERT 丢 `user_note`/`brand_site_url`：补齐列映射。
+
+三、工作效果
+
+系统核心功能模块编码完成度约60%，任务可完整执行并持久化状态，Redis 状态外置支持跨进程 Token/Webhook 共享，限流机制测试拦截率达100%。

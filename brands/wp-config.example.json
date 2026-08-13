@@ -1,0 +1,45 @@
+{
+  "_comment": "WordPress 发布配置示例 - 复制到品牌目录下并重命名为 wp-config.json，然后填写实际值",
+  "_doc": "详见 docs/CONFIGURATION.md 第6节",
+
+  "site_url": "https://blog.yourcompany.com",
+  "username": "content-editor",
+  "app_password": "xxxx xxxx xxxx xxxx xxxx xxxx",
+
+  "_field_notes": {
+    "site_url": "WordPress 站点地址，不要加末尾斜杠。别名: url",
+    "username": "WordPress 用户名（用于登录的那个）。别名: user",
+    "app_password": "WordPress 应用密码，不是登录密码。在 WP后台→用户→个人资料→应用密码 中生成。别名: application_password"
+  },
+
+  "_how_to_get_app_password": [
+    "1. 登录 WordPress 后台",
+    "2. 进入 用户 → 个人资料（Users → Profile）",
+    "3. 滚动到 应用密码（Application Passwords）区域",
+    "4. 输入名称（如 blog-writer），点击 添加新应用密码",
+    "5. 复制生成的密码（只显示一次，格式为 xxxx xxxx xxxx xxxx xxxx xxxx）"
+  ],
+
+  "_requirements": [
+    "WordPress 版本 >= 5.6（支持应用密码）",
+    "REST API 已启用（默认启用）",
+    "（可选）安装 Rank Math SEO 插件，自动写入SEO标题和描述"
+  ],
+
+  "_publish_behavior": {
+    "post_status": "draft（草稿，不会直接发布）",
+    "featured_image": "自动上传并设置为特色图像",
+    "seo": "自动写入 Rank Math 的 rank_math_title 和 rank_math_description",
+    "content_format": "HTML，支持 data-field 标记"
+  },
+
+  "_search_paths": [
+    "{brand_path}/wp-config.json",
+    "{brand_path}/config/wp-config.json",
+    "{instance_dir}/wp-config.json",
+    "{instance_dir}/brand/wp-config.json",
+    "{instance_dir}/../../brands/wp-config.json"
+  ],
+
+  "_dry_run": "未找到此文件时，脚本自动切换 dry-run 模式，生成 post_id=1 的模拟发布记录，不阻塞工作流"
+}

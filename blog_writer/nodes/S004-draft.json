@@ -1,0 +1,172 @@
+{
+  "id": "step.blog.writer.draft",
+  "seq": 4,
+  "name": "正文写作",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "web_search",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "startup",
+        "path": "001 启动确认.md",
+        "desc": "001 启动确认.md（含品牌摘要、语气调性、禁用规则）"
+      },
+      {
+        "id": "structure",
+        "path": "003 文章结构.md",
+        "desc": "003 文章结构.md（H2/H3大纲+素材引用提示）"
+      },
+      {
+        "id": "prd",
+        "path": "002 内容PRD.md",
+        "desc": "002 内容PRD.md（素材、钩子、论据）"
+      },
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识（tn语气、dp深度、pr受众、al水平）"
+      },
+      {
+        "id": "manifest",
+        "path": "brand/manifest.json",
+        "desc": "品牌文件清单"
+      },
+      {
+        "id": "anti_template",
+        "path": ".method/references/anti-template.md",
+        "desc": "反模板化写作规则（结构轮换、句法去同构、条目类型判断）"
+      },
+      {
+        "id": "credibility",
+        "path": ".method/references/credibility.md",
+        "desc": "可信度增强规则（数据使用、案例引用、结论表达、边界判断）"
+      },
+      {
+        "id": "depth",
+        "path": ".method/references/depth.md",
+        "desc": "深度增强规则（判断层、优先级、失败条件）"
+      },
+      {
+        "id": "writer_rules",
+        "path": ".method/references/writer-rules.md",
+        "desc": "正文写作通用约束（结构、E-E-A-T、阅读推进、差异化、自然表达）"
+      },
+      {
+        "id": "citation_rules",
+        "path": ".method/references/citation-rules.md",
+        "desc": "引用规则与数字使用规范（事实类型、引用强度、数字使用、表达风险、深度要求）"
+      },
+      {
+        "id": "seo_quality",
+        "path": ".method/references/seo-quality.md",
+        "desc": "通用SEO文章写作质量规则（搜索意图、主题框架、事实断言、内容深度、E-E-A-T、差异化、CTA、结尾、自检）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.structure"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "读 brand/manifest.json 了解可用品牌文件，有语气调性→读对应文件，有禁用词→读对应文件",
+      "严格遵循 003 文章结构.md 的文章结构和 SEO 信息",
+      "H2/H3 结构必须与方案一致",
+      "正文含 H2/H3、段落、列表、表格、FAQ、Conclusion。FAQ 为强制性要求，每篇文章必须有 FAQ 模块",
+      "正文中所有编号式标题（如 Signal #1、Step #2、Chapter #3 等）必须去掉 # 符号，写作 Signal 1、Step 2、Chapter 3。除非是 HTML fragment identifier（如 #sec-01）或命名实体中的标准 #，否则不得在标题和正文中使用裸 # 字符。",
+      "必须读 001 启动确认.md 的 ## 禁用词原文 节，逐条检查正文中是否出现禁用词。出现任何一条 → 删除该词/替换后再写",
+      "若存在 ## 本次禁用词白名单 或 forbidden_whitelist.json，名单内词条本任务允许出现，不算违规",
+      "必须读 001 启动确认.md 的 ## 语气调性原文 节，全文语气必须与文件中定义的语气一致",
+      "必须读 001 启动确认.md 的 ## 品牌知识原文 节，正文中的所有产品/服务描述必须与品牌知识原文一致，不得虚构或偏离",
+      "正文中引用品牌产品/服务时，必须引用品牌知识原文中的实际功能，不得创造原文不存在的功能",
+      "标题和正文中的编号类表述（如 Signal #1 / Step #2 / Item #3）必须清洗为无 # 格式（Signal 1 / Step 2 / Item 3）",
+      "如果 user_note 包含表格/多行/多主题内容，只读取与 keywords 匹配的目标行内容，忽略表格中其他行的要求"
+    ],
+    "forbidden": [
+      "在实例目录之外自建目录写入文件",
+      "004 正文.md 中包含 HTML 标签（<div>/<p>/<span>/<style> 等）。004 正文.md 必须为纯 Markdown 格式，不得包含 HTML 标签或内联样式。HTML 标签在 S005（字段化）阶段才加入"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "写完整英文正文",
+      "workflow": "读取 003 文章结构.md 的 ## SEO 信息 节获取 title、slug、主关键词等。读取 003 文章结构.md 的 ## 文章结构 节获取 H2/H3 结构。读 002 内容PRD.md 的 ## 素材清单 节获取可引用的数据、引语和案例。读 001 启动确认.md 的 ## 品牌摘要、## 语气调性、## 禁用规则、## 知识库调用规则 节（用 read 工具读 ## 知识库调用规则 全文） 了解可用品牌文件，有语气调性→读对应文件，有禁用词→读对应文件。用 read 工具读取 .method/references/001-反模板化写作模块.md 完整内容，了解反模板化写作规则。\n用 read 工具读取 .method/references/002-可信度增强模块.md 完整内容，了解数据/案例/结论的可信度规则。\n用 read 工具读取 .method/references/003-深度增强模块.md 完整内容，了解判断层和优先级规则。\n用 read 工具读取 .method/references/004-writer通用约束.md 完整内容，了解结构/E-E-A-T/阅读推进/差异化/自然表达规则。\n用 read 工具读取 .method/references/005-引用规则.md 完整内容，了解引用强度等级、数字使用规范、表达风险控制和正文深度要求。\n用 read 工具读取 001 启动确认.md 的 ## 禁用词原文 节全文，逐词对照正文确保无禁用词。\n用 read 工具读取 001 启动确认.md 的 ## 语气调性原文 节全文，确保正文语气一致。\n用 read 工具读取 001 启动确认.md 的 ## 品牌知识原文 节全文，确保产品描述不偏离。\n\n用 read 工具读取 .method/references/006-SEO写作质量规则.md 完整内容，了解搜索意图优先规则、主题专属框架、事实数字断言规则、内容深度、E-E-A-T、差异化、品牌CTA、结尾和自检规则。这些规则优先级高于通用写作要求。\n\n\n使用 web_search 收集正文所需的事实支撑和参考信息。\n\n⚠️ 外部搜索强制规则（必须遵守）：\n1. 必须执行至少 3 次 web_search，搜索本文主题相关的不同维度（如法规要求、行业标准、技术原理、平台规则）\n2. 每次 web_search 的结果 URL 必须记录下来\n3. 至少找到 3 条来自不同第三方网站（非品牌自有域名）的可引用来源\n4. 如果 web_search 全部超时或返回空，则正文中不得写入任何具体数据、法规引用、平台规则——改为条件判断/趋势判断\n5. 品牌自有域名（如 smsboosting.com）不得出现在 References 中\n\n6. 正文中 focus keyword（在 BID summary.keyword 中）至少出现 3 次，至少出现在 1 个 H2/H3 中，且出现在前 10% 内容中\n\n7. 正文末尾必须包含至少 1 条站内内链（指向品牌域名 smsboosting.com 的页面），作为 CTA 或推荐阅读。品牌自有链接只能用作内链，不能作为 References\n\n⚠️ 引用规则（必须遵守）：\n0. 正文中引用数据/判断/定义时必须标注 [N] 来源编号（如 [1][2]），对应 References 列表中的条目。每一条 References 必须至少被正文引用一次，末尾不列不在正文中对应出现的来源。\n\n1. 每次使用 web_search 后，必须记录搜索结果的来源 URL。\n2. 凡是正文中出现的具体数据、行业趋势、研究报告、法规条文、案例成果，必须标注可核验的来源。\n3. 不得在 References 中使用笼统概括（如 \"Industry knowledge\"、\"Research reports\"），每条引用必须包含：来源名称 + 可访问 URL + 简要说明该来源提供了什么信息。\n4. 如果 web_search 返回了具体文章/页面，优先以该页面的 URL 作为引用来源，不要改写为笼统的行业知识。\n5. 如果没有 web_search 可验证的外部来源支撑某个具体数据或主张，则不应在正文中写入该具体数据或主张，改为趋势判断、条件判断或场景分析。\n\n6. 🚫 **References 禁止引用品牌自有域名。** 所有 References 必须为独立第三方权威来源（行业标准组织、监管机构、技术文档、知名行业博客）。品牌自有内容（官网、产品页、博客、知识库）不得列入 References，只能用作正文内部链接。\n\n按方案结构写完整英文正文。写入 004 正文.md，格式：\n# {文章标题}\n\n正文内容（H2/H3/段落/列表/表格/Conclusion），末尾必须包含完整 FAQ 模块（5-8 个问答）\n\n## References\n- [来源名称](完整URL) —— 该来源提供了XX信息\n\n正文写入后，exec 运行以下验证：\npython3 -c \"\nimport re\nbody = open('004 正文.md').read()\n# 检查标题和首段是否有关键词\nkeyword = open('000 BID.json').read()\nimport json\nkw_data = json.loads(keyword)\nmain_kw = kw_data.get('summary', {}).get('keyword', '')\nif main_kw:\n    first_100_words = ' '.join(body.split()[:100]).lower()\n    if main_kw.lower() in first_100_words:\n        print(f'OK: 关键词 \"{main_kw}\" 出现在正文前100词内')\n    else:\n        print(f'WARN: 关键词 \"{main_kw}\" 未出现在正文前100词内')\n    exact_count = body.lower().count(main_kw.lower())\n    if exact_count >= 3:\n        print(f'OK: 关键词 \"{main_kw}\" 在正文中出现 {exact_count} 次')\n    else:\n        print(f'WARN: 关键词 \"{main_kw}\" 在正文中仅出现 {exact_count} 次（需 ≥3）')\n# 正文中检测 HTML 标签残留\nhtml_tags = re.findall(r'<[a-z]+[^>]*>', body)\nif html_tags:\n    print(f'WARN: 正文中发现 HTML 标签残留: {html_tags[:3]}')\n    print('请移除 HTML 格式残留')\n\"\n\n正文写入后，exec 运行以下综合验证（不依赖 LLM 判断）：\n```bash\npython3 << 'PYEOF'\nimport re\nbody = open('004 正文.md').read()\nimport json\nbid = json.load(open('000 BID.json'))\nkw = bid.get('summary', {}).get('keyword', '').lower()\n\nerrors = []\n# 1. H2 数量 ≥ 4\nh2s = re.findall(r'^## ', body, re.MULTILINE)\nif len(h2s) < 4: errors.append(f'H2={len(h2s)} < 4')\n\n# 2. FAQ 存在（至少 3 个问答对）\nfaqs = re.findall(r'\\*\\*[Qq]:|\\*\\*[Aa]:|\\n\\d+\\.\\s+', body)\nif 'FAQ' not in body and len(re.findall(r'\\?\\n', body)) < 3:\n    errors.append('缺少 FAQ 模块')\n\n# 3. References 存在\nif '## References' not in body:\n    errors.append('缺少 ## References 节')\n\n# 4. References 至少 2 条\nrefs = re.findall(r'\\[([^\\]]+)\\]\\(https?://[^)]+\\)', body)\nif len(refs) < 2:\n    errors.append(f'References={len(refs)} < 2')\n\n# 5. 关键词在标题或首段（精确连续匹配）\nif kw:\n    first_100 = ' '.join(body.split()[:100]).lower()\n    if kw not in first_100:\n        errors.append(f'Focus keyword \"{kw}\" 未出现在正文前100词内（精确连续匹配）')\n    exact_count = body.lower().count(kw)\n    if exact_count < 3:\n        errors.append(f'Focus keyword \"{kw}\" 在正文中仅出现 {exact_count} 次（需 ≥3 次精确连续匹配）')\n\n# 6. References 没有笼统概括\nfor phrase in ['industry knowledge', 'research reports', 'industry research']:\n    ref_section = body[body.find('## References'):] if '## References' in body else ''\n    if phrase.lower() in ref_section.lower():\n        errors.append(f'References 含笼统概括: \"{phrase}\"')\n\n# 7. References 禁止品牌自有域名\n_ref_section = body[body.find('## References'):] if '## References' in body else ''\n_ref_urls = re.findall(r'https?://[^\\s)]+', _ref_section)\nfor _url in _ref_urls:\n    try:\n        _startup_path = '001 启动确认.md'\n        if os.path.exists(_startup_path):\n            with open(_startup_path) as _sf:\n                for _sl in _sf:\n                    if _sl.startswith('## 品牌官网'):\n                        _bsu = _sl.split()[-1].strip()\n                        if _bsu and _bsu != '{brand_site_url}':\n                            _bd = _bsu.split('//')[1] if '//' in _bsu else _bsu\n                            _bd = _bd.split('/')[0].replace('www.', '')\n                            if _bd and _bd in _url:\n                                errors.append(f'References 包含品牌自有域名: {_url}')\n    except:\n        pass\n\nif errors:\n    print('❌ 正文验证未通过:')\n    for e in errors: print(f'  - {e}')\n    exit(1)\nelse:\n    print(f'✅ 正文验证通过 (H2={len(h2s)} FAQ=OK Refs={len(refs)})')\nPYEOF\n```",
+      "output": {
+        "id": "draft",
+        "name": "正文文档",
+        "path": "004 正文.md",
+        "template": {
+          "title": "",
+          "slug": "",
+          "body": "",
+          "references": []
+        }
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "H2 数量 ≥ 4",
+      "on_fail": "pass=false",
+      "target": "file:004 正文.md"
+    },
+    {
+      "id": 2,
+      "rule": "标题与 000 BID.json 中的 summary.title 一致",
+      "on_fail": "pass=false",
+      "target": "file:004 正文.md"
+    },
+    {
+      "id": 3,
+      "rule": "正文内容不为空（标题后至 ## References 前有非空内容）",
+      "on_fail": "hard_fail",
+      "target": "step"
+    },
+    {
+      "id": 4,
+      "rule": "包含 FAQ 模块（至少 3 个问答对）",
+      "on_fail": "pass=false",
+      "target": "file:004 正文.md"
+    },
+    {
+      "id": 5,
+      "rule": "## References 下至少 2 条引用，每条必须包含可识别来源名称和具体描述，不得出现笼统概括（如 'Industry knowledge'、'Research' 等无具体来源的表述）",
+      "on_fail": "hard_fail",
+      "target": "file:004 正文.md"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    },
+    "mode": {
+      "type": "string",
+      "default": "auto",
+      "enum": ["auto", "supervised", "manual"],
+      "description": "运行模式"
+    }
+  }
+}

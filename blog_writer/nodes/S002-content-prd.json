@@ -1,0 +1,140 @@
+{
+  "id": "step.blog.writer.prd",
+  "seq": 2,
+  "name": "内容PRD",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "web_search",
+      "web_fetch",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识（ev证据类型、gi引用角色、ct体裁、pr受众、dp深度、tn语气）"
+      },
+      {
+        "id": "startup",
+        "path": "001 启动确认.md",
+        "desc": "启动确认（关键词、附加要求）"
+      },
+      {
+        "id": "manifest",
+        "path": "brand/manifest.json",
+        "desc": "品牌文件清单"
+      },
+      {
+        "id": "anti_template",
+        "path": ".method/references/anti-template.md",
+        "desc": "反模板化写作规则（结构轮换、句法去同构、条目类型判断）"
+      },
+      {
+        "id": "credibility",
+        "path": ".method/references/credibility.md",
+        "desc": "可信度增强规则（数据使用、案例引用、结论表达、边界判断）"
+      },
+      {
+        "id": "depth",
+        "path": ".method/references/depth.md",
+        "desc": "深度增强规则（判断层、优先级、失败条件）"
+      },
+      {
+        "id": "writer_rules",
+        "path": ".method/references/writer-rules.md",
+        "desc": "正文写作通用约束（结构、E-E-A-T、阅读推进、差异化、自然表达）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.bid"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "从 BID 的 ev（证据类型）决定素材搜集方向：01研究数据/02专家引述/03实测实验/04官方文档/05多方引述",
+      "素材必须是可直接引用的具体内容（数据、引语、案例、事实），不是纯链接列表",
+      "开头钩子 + 3-4 个主要论据"
+    ],
+    "forbidden": [
+      "写正文段落",
+      "写 H2/H3 大纲",
+      "跳过素材搜集直接写 PRD",
+      "脱离 BID 范围选题"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "搜集素材",
+      "workflow": "从 000 BID.json 读取 ev（证据类型）、gi（AI引用角色）、pr（受众）、al（受众水平）、keywords 确定素材方向。读 001 启动确认.md 的 ## 品牌摘要、## 语气调性、## 禁用规则、## 知识库调用规则 节获取品牌信息（用 read 工具读取 ## 知识库调用规则 节全文），读品牌知识库提取已有产品信息和数据。\n\n根据 ev 指导方向：\n- ev=01（研究数据）→ 搜索行业数据、统计报告，提取具体数字\n- ev=02（专家引述）→ 搜索行业专家观点，提取可引用原句\n- ev=03（实测实验）→ 搜索实测案例、产品对比数据\n- ev=04（官方文档）→ 搜索官方文档、API规格的可引用段落\n- ev=05（多方引述）→ 综合多个来源交叉验证\n\n每次 web_search 找到有效内容后，用 web_fetch 打开原文提取可引用段落。每条素材记录来源 URL。",
+      "output": {
+        "id": "material",
+        "name": "素材库（追加）",
+        "path": "002 内容PRD.md",
+        "template": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "写内容PRD",
+      "workflow": "用 read 工具读取 .method/references/004-writer通用约束.md 完整内容，了解写作约束。\n使用已搜集的素材，结合 BID 和品牌信息，写入 002 内容PRD.md：\n\n## 素材清单\n- 数据/统计：[数据点]（来源：URL）\n- 专家引语：[引语] — （人物，来源：URL）\n- 案例/事实：[案例]（来源：URL）\n- 可引用论证：[论证内容]（来源：URL）\n- 品牌自有素材：从品牌知识库提取\n\n## 内容PRD\n### 开头钩子\n开篇切入点描述\n\n### 主要论据（3-4个）\n1. [论点1摘要]\n2. [论点2摘要]\n3. [论点3摘要]\n4. [论点4摘要]（可选）\n\n### attn_level\n注意力水平百分比（默认 15%）\n\n### 业务场景对比\n至少 1 个场景对比表或对比矩阵，如「OTP 验证码 vs 营销短信 的路由决策差异」「高价值流量 vs 品牌流量 vs 普通流量的投放路径差异」，对比维度由文章主题决定。\n\n### 判断框架或决策清单\n至少包含一个可操作的判断框架、业务评估模型或检查清单，帮助读者在理解机制后做出业务决策。例如：发送前检查清单、路由质量评估维度、不同业务场景的选型建议。\n\n### 品牌合规自查\n- 语气是否符合 BID 的 tn（{BID的tn}）\n- 禁用词检查（读品牌禁用词文件）\n- 品牌红线确认",
+      "output": {
+        "id": "prd",
+        "name": "内容PRD",
+        "path": "002 内容PRD.md",
+        "template": {}
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "存在 ## 内容PRD 节",
+      "on_fail": "hard_fail",
+      "target": "file:002 内容PRD.md"
+    },
+    {
+      "id": 2,
+      "rule": "存在开头钩子和至少 3 个主要论据",
+      "on_fail": "pass=false",
+      "target": "file:002 内容PRD.md"
+    },
+    {
+      "id": 3,
+      "rule": "存在 ## 素材清单 节且有可引用内容",
+      "on_fail": "pass=false",
+      "target": "file:002 内容PRD.md"
+    },
+    {
+      "id": 4,
+      "rule": "存在 ## 素材清单 节且有可引用内容",
+      "on_fail": "hard_fail",
+      "target": "file:002 内容PRD.md"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    }
+  }
+}

@@ -1,0 +1,48 @@
+工作日报 - 第八天（编码阶段：企业平台集成+配置热更新+API版本化）
+
+一、今日工作内容
+
+1. 完成企业平台集成适配器设计与实现：
+   - 采用适配器模式抽象三大横切接口：AuthProvider（认证）、LoggerAdapter（日志）、MetricsCollector（指标）。
+   - AuthProvider双实现：LocalAuthProvider（本地JWT，开发环境）与SSOAuthProvider（企业SSO/OAuth2，生产环境），通过配置security.sso.enabled一键切换。
+   - SSOAuthProvider支持OAuth2授权码模式与密码模式双兼容，满足企业不同SSO接入要求。
+
+2. SSO Session 双写与配置热更新：
+   - SSO Session 内存 + StateStore 双写：SSO 认证成功后同步写入内存和 Redis，重启后可恢复。
+   - SSO Session 自动清理：每 10 分钟清理过期会话，防止内存泄漏。
+   - 配置热更新：修改 `config.json` 后自动检测变更并热加载，无需重启服务。
+   - 配置变更回调：支持注册回调函数，配置变更时自动触发（如重置 AuthProvider 缓存）。
+
+3. 认证 Provider 缓存与切换：
+   - `create_auth_provider()` 增加缓存机制，避免每次请求都重新实例化 AuthProvider。
+   - 配置热更新后自动重置缓存，确保 SSO 开关切换立即生效。
+   - SSO 启用时禁用本地改密接口，防止双写冲突。
+
+4. 对接公司监控体系：
+   - 扩展指标采集器支持Prometheus text exposition format输出，提供/api/v1/metrics?format=prometheus端点，Content-Type符合Prometheus抓取规范。
+   - 结构化日志输出JSON格式，包含trace_id、task_id，可直接接入公司ELK/Loki日志平台。
+   - 指标端点排除限流：`/api/metrics` 和 `/api/v1/metrics` 不参与限流计数。
+
+5. API版本化改造：
+   - 引入/api/v1统一前缀，所有业务API迁移至v1路径。
+   - 保留/api前缀作为兼容层，旧版前端可继续使用至升级完成，实现无停机平滑过渡。
+   - Webhook、审核、通知等新增端点同时注册于两套路径下。
+
+6. CORS跨域优化：
+   - 支持环境变量CORS_ORIGINS与配置文件双配置方式定义允许跨域域名列表。
+   - 新增/health、/ready健康检查与就绪检查端点，供公司K8s平台做存活探针和就绪探针。
+
+7. Bug修复：
+   - 修复就绪检查端点在LLM未配置时误返回200：改为返回503并标记degraded状态，与K8s就绪探针语义对齐。
+   - 修复Windows环境下数据库文件占用导致临时目录无法删除：测试中显式关闭连接并触发GC。
+   - 修复 SSO 启用后 LocalAuthProvider 仍使用旧密码哈希：配置热更新时重置缓存。
+
+二、发现的问题与解决
+
+- 配置热更新后 AuthProvider 仍用旧 SSO 开关：重置 AuthProvider 缓存解决。
+- 指标端点被限流导致 Prometheus 抓取失败：限流中间件排除 `/api/metrics` 和 `/api/v1/metrics`。
+- SSO Session 无清理机制导致内存泄漏：新增 10 分钟定期清理。
+
+三、工作效果
+
+企业平台对接能力基本就绪，配置切换即可完成本地到生产环境的迁移，开发完成度约95%。认证 Provider 缓存 + 配置热更新实现认证模式无重启切换。

@@ -1,0 +1,89 @@
+{
+  "id": "step.blog.writer.publish_wp",
+  "seq": 11,
+  "name": "WordPress 发布",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "publish_json",
+        "path": "007 发布包.json",
+        "desc": "结构化发布数据（keyword/title/slug/meta/cover_image）"
+      },
+      {
+        "id": "publish_md",
+        "path": "007 发布包.md",
+        "desc": "发布包全文（含 Final article body HTML）"
+      },
+      {
+        "id": "wp_config",
+        "path": "",
+        "desc": "WordPress 站点配置（脚本自动从 brand_path 搜索 wp-config.json）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.publish"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "先运行 assemble_publish.py 确保 007 发布包.json 存在",
+      "调用确定性脚本 publish_to_wp.py，不使用 LLM 判断"
+    ],
+    "forbidden": [
+      "在代码中硬编码 WordPress 用户名或密码（从 wp-config.json 读取）",
+      "在步骤描述中明文写入 app_password"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "WordPress 发布",
+      "workflow": "使用 run_script 跑确定性发布脚本（不要手写发布记录）：\n\n```\nrun_script(\"publish_to_wp.py\", [\"--out-dir\", \".\", \"--brand-path\", \"{brand_path}\"])\n```\n\n等价命令：\n```bash\npython3 ../../tools/blog-writer/publish_to_wp.py --out-dir . --brand-path \"{brand_path}\"\n```\n\n脚本行为：\n1. 读 007 发布包.json / .md\n2. 若存在 wp-config.json → 上传封面并创建 WordPress draft + Rank Math\n3. 若无 wp-config.json → **自动 dry-run**，仍写入 发布记录.json（post_id>0, status=draft, dry_run=true）\n4. 产出 发布记录.json 后验证存在即可\n\n真发布需在品牌目录提供 wp-config.json（见 brands/*/wp-config.example.json）。",
+      "output": {
+        "id": "publish_record",
+        "name": "发布记录",
+        "path": "发布记录.json",
+        "template": {}
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "发布记录.json 存在且非空",
+      "on_fail": "hard_fail",
+      "target": "file:发布记录.json"
+    },
+    {
+      "id": 2,
+      "rule": "发布记录.json 包含 post_id（>0）",
+      "on_fail": "hard_fail",
+      "target": "file:发布记录.json::exec:python3 -c 'import json; d=json.load(open(\"发布记录.json\")); exit(0 if d.get(\"post_id\",0)>0 else 1)'"
+    },
+    {
+      "id": 3,
+      "rule": "发布记录.json 包含 post_url",
+      "on_fail": "warn",
+      "target": "file:发布记录.json::exec:python3 -c 'import json; d=json.load(open(\"发布记录.json\")); exit(0 if d.get(\"post_url\") else 1)'"
+    },
+    {
+      "id": 4,
+      "rule": "发布状态为 draft（非意外发布）",
+      "on_fail": "warn",
+      "target": "file:发布记录.json::exec:python3 -c 'import json; d=json.load(open(\"发布记录.json\")); exit(0 if d.get(\"status\")==\"draft\" else 1)'"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "品牌目录路径（可选），如 ../../brands/sms-boosting/，脚本自动搜索 wp-config.json"
+    }
+  }
+}

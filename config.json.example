@@ -1,0 +1,173 @@
+{
+  "_comment": "Blog-Writer 配置文件示例。复制为 blog_writer/config.json 后修改。敏感信息（密码/API Key）建议通过环境变量设置，不要硬编码在此文件中。",
+  "_doc_path": "docs/CONFIGURATION.md",
+
+  "security": {
+    "_comment": "安全与认证配置",
+    "admin_password_hash": "",
+    "admin_password_env": "BLOG_WRITER_ADMIN_PASSWORD",
+    "operator_password_hash": "",
+    "operator_password_env": "BLOG_WRITER_OPERATOR_PASSWORD",
+    "api_token": "",
+    "api_token_env": "BLOG_WRITER_API_TOKEN",
+    "token_expire_hours": 24,
+    "rate_limit_per_minute": 60,
+    "allowed_origins": [
+      "http://localhost:8000",
+      "http://127.0.0.1:8000"
+    ],
+    "sso": {
+      "_comment": "SSO 单点登录配置（可选，企业部署时启用）",
+      "enabled": false,
+      "auth_url": "https://sso.yourcompany.com/oauth2/authorize",
+      "token_url": "https://sso.yourcompany.com/oauth2/token",
+      "userinfo_url": "https://sso.yourcompany.com/oauth2/userinfo",
+      "client_id": "your-client-id",
+      "client_secret": "your-client-secret",
+      "redirect_uri": "https://app.yourcompany.com/callback",
+      "scope": "openid profile email"
+    }
+  },
+
+  "database": {
+    "_comment": "数据库配置。backend 可选 sqlite/postgres/mysql。PostgreSQL/MySQL 连接信息优先从环境变量读取（DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD）。",
+    "backend": "sqlite",
+    "sqlite_path": "./instance/blog_writer.db",
+    "postgres": {
+      "host_env": "DB_HOST",
+      "port_env": "DB_PORT",
+      "database_env": "DB_NAME",
+      "user_env": "DB_USER",
+      "password_env": "DB_PASSWORD",
+      "host": "localhost",
+      "port": 5432,
+      "database": "blog_writer",
+      "user": "blog_writer",
+      "password": "",
+      "pool_size": 5,
+      "max_overflow": 10
+    },
+    "mysql": {
+      "host_env": "MYSQL_HOST",
+      "port_env": "MYSQL_PORT",
+      "database_env": "MYSQL_DATABASE",
+      "user_env": "MYSQL_USER",
+      "password_env": "MYSQL_PASSWORD",
+      "host": "localhost",
+      "port": 3306,
+      "database": "blog_writer",
+      "user": "blog_writer",
+      "password": ""
+    }
+  },
+
+  "llm": {
+    "_comment": "大模型配置。支持多模型，default_model 指定默认使用哪个。api_key 和 base_url 优先从环境变量（LLM_API_KEY/LLM_BASE_URL）读取。",
+    "default_model": "default",
+    "models": {
+      "default": {
+        "_comment": "默认模型：日常写作，速度快成本低",
+        "provider": "openai_compatible",
+        "base_url_env": "LLM_BASE_URL",
+        "api_key_env": "LLM_API_KEY",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "",
+        "model": "deepseek-v4-flash",
+        "temperature": 0.7,
+        "max_tokens": 8192,
+        "timeout": 120,
+        "thinking": false,
+        "retry": {
+          "max_retries": 3,
+          "retry_delay": 2
+        }
+      },
+      "pro": {
+        "_comment": "高级模型：复杂推理/长文，质量高但成本高",
+        "provider": "openai_compatible",
+        "base_url_env": "LLM_BASE_URL",
+        "api_key_env": "LLM_API_KEY",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "",
+        "model": "deepseek-v4-pro",
+        "temperature": 0.7,
+        "max_tokens": 8192,
+        "timeout": 120,
+        "thinking": false,
+        "retry": {
+          "max_retries": 3,
+          "retry_delay": 2
+        }
+      }
+    }
+  },
+
+  "workflow": {
+    "_comment": "工作流引擎配置",
+    "max_iterations_per_step": 20,
+    "step_timeout_minutes": 30,
+    "default_mode": "auto",
+    "instance_root": "./instance",
+    "nodes_dir": "./nodes",
+    "backup_dir": "./nodes/.backup",
+    "max_backup_versions": 10,
+    "max_retries_per_step": 3,
+    "retry_delay_seconds": 2,
+    "max_tokens_per_task": 0,
+    "enable_breakpoint_resume": true,
+    "use_database": true,
+    "use_file_fallback": false
+  },
+
+  "tools": {
+    "_comment": "Agent 工具配置",
+    "web_search": {
+      "enabled": true,
+      "max_results": 5
+    },
+    "python_exec": {
+      "timeout": 10
+    }
+  },
+
+  "monitoring": {
+    "_comment": "监控配置",
+    "enable_health_check": true,
+    "enable_metrics": true,
+    "health_check_interval": 30
+  },
+
+  "logging": {
+    "_comment": "日志配置。format: text/json。webhook_url 用于错误日志推送。",
+    "format": "text",
+    "webhook_url": "",
+    "webhook_level": "ERROR"
+  },
+
+  "notifications": {
+    "_comment": "通知渠道配置（可选）。支持 webhook/email/dingtalk/feishu 等。",
+    "channels": {
+      "_example_webhook": {
+        "type": "webhook",
+        "url": "https://yourcompany.com/api/notify",
+        "secret": "",
+        "events": ["task.completed", "task.failed", "review.requested"]
+      },
+      "_example_email": {
+        "type": "email",
+        "smtp_host": "smtp.yourcompany.com",
+        "smtp_port": 587,
+        "username": "",
+        "password": "",
+        "from": "blog-writer@yourcompany.com",
+        "to": ["admin@yourcompany.com"],
+        "events": ["task.failed"]
+      }
+    }
+  },
+
+  "sso": {
+    "_comment": "兼容旧版 SSO 配置路径（security.sso 为新版推荐路径）",
+    "enabled": false
+  }
+}

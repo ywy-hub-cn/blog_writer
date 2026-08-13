@@ -1,0 +1,151 @@
+version: '3.8'
+
+# Blog-Writer AI Workflow System - Docker Compose
+# 企业级部署配置
+#
+# 前置准备（首次部署前必须完成）:
+#   1. cp .env.example .env  并填写必要的环境变量
+#   2. 创建 config.json（最简配置见下方示例）
+#      {
+#        "security": { "admin_password": "your-password" },
+#        "llm": { "models": { "default": { "api_key": "your-llm-key" } } }
+#      }
+#   3. docker compose up -d
+#
+# 注意：config.json 不存在时 compose 会启动失败（bind mount 源文件必须存在）
+
+services:
+  blog-writer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: blog-writer
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - blog_data:/app/blog_writer/instance
+      - blog_brands:/app/brands
+      - ./config.json:/app/blog_writer/config.json:ro
+    environment:
+      - BLOG_WRITER_MODE=production
+      - BLOG_WRITER_CONFIG=/app/blog_writer/config.json
+      # 数据库配置（生产环境使用环境变量注入）
+      # 生产建议 postgres；未设置时仍可用 sqlite（见 BLOG_WRITER_CONFIG）
+      - DB_BACKEND=${DB_BACKEND:-postgres}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=blog_writer
+      - DB_USER=blog_writer
+      - DB_PASSWORD=${DB_PASSWORD}
+      # LLM 配置
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      # 管理员密码 / 平台服务 Token
+      - BLOG_WRITER_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - BLOG_WRITER_API_TOKEN=${BLOG_WRITER_API_TOKEN}
+      # SSO 配置（可选）
+      - SSO_ENABLED=${SSO_ENABLED:-false}
+      # 日志配置
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      # Redis 状态外置（Token / Webhook）
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - BLOG_WRITER_STATE_BACKEND=${BLOG_WRITER_STATE_BACKEND:-redis}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - blog-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '4'
+        reservations:
+          memory: 1G
+          cpus: '1'
+      # 任务/审核/Token 为进程内存态，禁止多副本
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: blog-writer-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=blog_writer
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=blog_writer
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - blog-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blog_writer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+
+  redis:
+    image: redis:7-alpine
+    container_name: blog-writer-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - blog-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:alpine
+    container_name: blog-writer-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - blog-writer
+    networks:
+      - blog-network
+
+volumes:
+  blog_data:
+  blog_brands:
+  postgres_data:
+  redis_data:
+
+networks:
+  blog-network:
+    driver: bridge
+    internal: false

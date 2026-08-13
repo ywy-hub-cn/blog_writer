@@ -1,0 +1,99 @@
+{
+  "id": "step.blog.writer.structure",
+  "seq": 3,
+  "name": "结构生成",
+  "kind": "agent_action",
+  "resources": {
+    "allow": [
+      "read",
+      "write",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "prd",
+        "path": "002 内容PRD.md",
+        "desc": "002 内容PRD.md（钩子、论据、素材）"
+      },
+      {
+        "id": "bid",
+        "path": "000 BID.json",
+        "desc": "BID标识（st结构模板、ct体裁）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.prd"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "H2/H3 英文标题",
+      "H2 ≥ 4 个",
+      "每个 H2 标注 semantic_type",
+      "BID 的 st 决定 H2 组织方式",
+      "BID 的 cta+js 决定 CTA 位置"
+    ],
+    "forbidden": [
+      "写段落内容",
+      "写 bullet 正文",
+      "写示例段落/开头/结尾草稿",
+      "生成新选题",
+      "修改 PRD"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "生成文章结构",
+      "workflow": "【硬性要求】必须生成至少 4 个文章 H2（建议 5-7 个），每个 H2 严格使用格式 `### H2 N: 标题 (semantic_type: xxx)`（英文括号），每个 H2 下必须有 2-3 个 H3 要点。\n\n从 002 内容PRD.md 的 ## 内容PRD 节读取钩子和论据。从 000 BID.json 读取 st（结构模板）决定 H2 的组织方式：\nst=01（步骤指南）→ H2 按步骤顺序\nst=02（清单列表）→ H2 按清单项排列\nst=03（概念定义）→ H2 按定义→组件→类型→示例\nst=04（对比评测）→ H2 含概览表格→逐个分析→推荐\nst=05（研究报告）→ H2 按方法论→发现→分析→结论\nst=06（完整指南）→ H2 按章节递进\nst=07（业务决策框架）→ H2 按定义→业务场景对比→判断框架→行动清单→核心结论\n\nH2 分配规则（确保至少 4 个）：\n- H2#1：开头钩子（hook）\n- H2#2 到 H2#N-2：基于 key_arguments 分配主体内容（至少 2 个）\n- H2#N-1：必须是「实践应用与行动指南」（semantic_type: action_guide），包含场景对比、检查清单或评估框架\n- H2#N：必须是「核心结论与下一步」（semantic_type: summary_cta），做收束+行动引导\n\n写入 003 文章结构.md，严格按以下格式：\n## SEO 信息\n- title: {推断的文章标题}\n- slug: {推断的slug}\n- meta_description: {推断的meta描述}\n- 主关键词: {主关键词}\n\n## 文章结构\n### H2 1: 标题 (semantic_type: hook)\n- H3 1.1: 要点\n- H3 1.2: 要点\n### H2 2: 标题 (semantic_type: argument)\n- H3 2.1: 要点\n- H3 2.2: 要点\n...（至少 4 个 H2）\n### H2 N-1: 标题 (semantic_type: action_guide)\n- H3 ...\n### H2 N: 标题 (semantic_type: summary_cta)\n- H3 ...\n\n## 素材引用提示\n- 哪个论据需要引用素材库的哪个数据/引语\n\n写入后 exec 验证结构完整性：\n```bash\npython3 << 'PYEOF'\nimport re\nbody = open('003 文章结构.md', encoding='utf-8').read()\nh2s = re.findall(r'^### H2 \\d+:', body, re.MULTILINE)\nh2_with_st = re.findall(r'semantic_type: \\w+', body)\nprint(f'H2 数量: {len(h2s)}')\nprint(f'标注 semantic_type: {len(h2_with_st)}')\nif len(h2s) < 4:\n    print('ERROR: H2 少于 4 个，必须至少 4 个')\n    exit(1)\nif len(h2_with_st) < len(h2s):\n    print(f'ERROR: {len(h2s) - len(h2_with_st)} 个 H2 缺少 semantic_type')\n    exit(1)\nprint('结构验证通过')\nPYEOF\n```",
+      "output": {
+        "id": "structure",
+        "name": "文章结构",
+        "path": "003 文章结构.md",
+        "template": {}
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "H2 ≥ 4 个",
+      "on_fail": "pass=false",
+      "target": "file:003 文章结构.md"
+    },
+    {
+      "id": 2,
+      "rule": "每个 H2 有 semantic_type",
+      "on_fail": "pass=false",
+      "target": "file:003 文章结构.md"
+    },
+    {
+      "id": 3,
+      "rule": "存在 ## 文章结构 节且 H2 数量 ≥ 4",
+      "on_fail": "hard_fail",
+      "target": "file:003 文章结构.md"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    }
+  }
+}

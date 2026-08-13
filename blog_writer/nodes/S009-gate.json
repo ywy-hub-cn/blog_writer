@@ -1,0 +1,122 @@
+{
+  "id": "step.blog.writer.gate",
+  "seq": 9,
+  "name": "Gate 校验",
+  "kind": "agent_action",
+  "resources": {
+    "llm_model": "default",
+    "isolated_session": true,
+    "allow": [
+      "read",
+      "write",
+      "exec"
+    ],
+    "files": [
+      {
+        "id": "preview",
+        "path": "006 呈现文档.html",
+        "desc": "006 呈现文档.html（完整HTML预览）"
+      },
+      {
+        "id": "field",
+        "path": "005 字段化文档.html",
+        "desc": "005 字段化文档.html（字段化后的结构化HTML）"
+      },
+      {
+        "id": "draft",
+        "path": "004 正文.md",
+        "desc": "004 正文.md（纯正文，不包含自审结果和Gate结果）"
+      },
+      {
+        "id": "plan",
+        "path": "003 文章结构.md",
+        "desc": "003 文章结构.md（SEO 信息）"
+      },
+      {
+        "id": "startup_full",
+        "path": "001 启动确认.md",
+        "desc": "启动确认（含 ## 禁用词原文 / ## 语气调性原文 / ## 品牌知识原文 等品牌文件全文）"
+      },
+      {
+        "id": "brand_dir",
+        "path": "brand/",
+        "desc": "品牌原始文件目录（S000 从 brand_path 复制过来的完整文件）"
+      }
+    ],
+    "from_step": [
+      "step.blog.writer.review_draft"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "spawn 独立 session 做 Gate 校验，不继承本步对话上下文",
+      "Gate 的目的是判断文章是否可进入发布阶段，不是为了刻意挑错",
+      "Gate session 必须读 001 启动确认.md 的 ## 禁用词原文 / ## 语气调性原文 / ## 品牌知识原文 节做品牌合规检查",
+      "Gate session 必须先 run_script(\"check_forbidden.py\") 做禁用词检测（自动尊重本次白名单），再根据脚本结果判断，不得跳过脚本直接用 LLM 判断",
+      "封面图（<figure data-seq=\"cover\"> 或 data-field=\"image\" 含 cover）必须存在",
+      "HTML 中包含至少 1 张真实图片（<img src=...>，排除 CDN/空白）",
+      "FAQ 使用 <details class=\"faq-item\"> 折叠格式（非 <p><strong> 朴素格式）",
+      "References 中不包含品牌自有域名",
+      "封面图 URL 不得出现在 persistent/blog-writer/used-cover-images.json 的已用列表中",
+      "仅保留 1 个 data-seq=\"cover\" 的封面图（不得重复）",
+      "正文中 focus keyword 出现 ≥3 次",
+      "至少 1 个 H2/H3 包含 focus keyword",
+      "至少 1 条站内内链（smsboosting.com）"
+    ],
+    "forbidden": [
+      "本步 agent 自己执行 Gate",
+      "绕开 spawn",
+      "使用 write 工具直接写入 009 Gate结果.md",
+      "将 Gate 结果追加到 004 正文.md 或其他非目标文件"
+    ]
+  },
+  "actions": [
+    {
+      "id": 1,
+      "name": "执行 Gate 校验",
+      "workflow": "读取 004 正文.md 的正文内容（# 标题后的 ## References 之前的部分）。读取 003 文章结构.md 的 ## SEO 信息 节。构建 Gate prompt：\n『## Gate 校验任务\n请逐项检查以下文章是否符合发布标准。\n\n## 校验清单\n### 一、首屏与定位\n- 标题是否明确点题\n- 开头 1-2 段是否说明文章讲什么\n- 开头 1-2 段是否说明写给谁\n- 开头 1-2 段是否说明为什么重要\n- 开头 1-2 段是否说明读完可以得到什么\n\n### 二、结构与可读性\n- H2/H3 是否清晰\n- 段落是否围绕标题推进\n- 无逻辑跳跃、无重复表达、无前后矛盾\n\n### 三、内容质量\n- 关键主张有解释或合理支撑\n- 无绝对化承诺\n- 无品牌可信度损害\n\n### 四、SEO 一致性\n- 第一段出现主关键词或其同义词\n- 关键词密度处于建议区间\n- H2/H3 合理覆盖主关键词，且不超过 75% 的 H2/H3 都围绕同一关键词主题\n- 主关键词使用的是文章生成前已确认的关键词，未在发布包阶段重新生成\n- 关键词与方案一致\n\n### 五、格式洁净度（⚠️ 重点）\n- 无下划线残留\n- 无异常空行\n- 无 SOURCE 残留\n- 无编辑痕迹\n\n### 六、参考文献（⚠️ 新增重点）\n- References 是否为笼统概括而非具体来源\n\n### 七、品牌禁用词自动检测（⚡ 必须先 run_script，禁止 LLM 自行判断）\n\n**步骤：**\n1. 用 read 确认 001 启动确认.md 含 ## 禁用词原文；若有 ## 本次禁用词白名单 / forbidden_whitelist.json，名单内词条本任务豁免\n2. 执行：\n`\nrun_script(\"check_forbidden.py\", [\"--out-dir\", \".\"])\n`\n等价：python3 ../../tools/blog-writer/check_forbidden.py --out-dir .\n3. 脚本会自动读取禁用词原文 + 本次白名单；命中未豁免词 → 输出 ❌ 并 exit 1；否则 ✅\n4. 若脚本 ❌，品牌合规直接判定不通过（passed=false），issues 添加「禁用词命中：…」；✅ 则该维度通过\n\n### 七、素材与参考文献 URL 真实性验证（⚡ exec 验证，独立检测）\n\n在品牌合规检查之前，先 exec 验证素材清单和参考文献中的 URL 是否真实存在：\n```bash\npython3 << 'PYEOF'\nimport re, urllib.request, urllib.error, socket\nsocket.setdefaulttimeout(5)\ndef check_url(url):\n    try:\n        req = urllib.request.Request(url, method='HEAD',\n            headers={'User-Agent': 'Mozilla/5.0'})\n        resp = urllib.request.urlopen(req)\n        return resp.status < 400, ''\n    except urllib.error.HTTPError as e:\n        return False, f'HTTP {e.code}'\n    except Exception as e:\n        return False, str(e)[:50]\nurls = set()\n# 从 002 内容PRD.md 的 ## 素材清单 节提取 URL\nprd = open('002 内容PRD.md', encoding='utf-8').read()\nm = re.search(r'## 素材清单[\\s\\S]*?(?=## |\\\\Z)', prd)\nif m:\n    urls.update(re.findall(r'https?://[^\\s)\\)]+', m.group()))\n# 从 004 正文.md 的 ## References 节提取 URL\nbody = open('004 正文.md', encoding='utf-8').read()\nm = re.search(r'## References[\\s\\S]*', body)\nif m:\n    urls.update(re.findall(r'https?://[^\\s)\\)\\]]+', m.group()))\nprint(f'共找到 {len(urls)} 个 URL')\nfailed = []\nfor url in sorted(urls)[:20]:  # 最多检查 20 个\n    ok, err = check_url(url)\n    if ok:\n        print(f'  ✅ {url[:80]}')\n    else:\n        print(f'  ❌ {url[:80]} ({err})')\n        failed.append(url)\nif failed:\n    print(f'\\n❌ {len(failed)}/{len(urls)} 个 URL 不可访问')\nelse:\n    print(f'\\n✅ 全部 URL 可访问')\nPYEOF\n```\n如果脚本输出 ❌，说明有来源 URL 不可访问（可能是编造的），Gate 必须标记为不通过。\n\n3. 如果脚本输出 ❌，品牌合规直接判定为不通过（passed=false），并在 issues 中添加 '禁用词命中：{词列表}'\n4. 如果脚本输出 ✅，品牌合规标记为通过\n\n### 八、语气调性 + 品牌知识 人工检查\n- 用 read 工具读 ## 语气调性原文，检查全文语气是否一致\n- 用 read 工具读 ## 品牌知识原文，检查产品描述是否有虚构\n- 若有品牌知识库规则（## 知识库调用规则），检查是否已遵守\n\n**Gate 原则**：禁用词检测 exec 脚本输出 ❌ 则默认不通过。语气/品牌知识偏离严重则不通过。\n\n### 九、品牌合规对照内容来源\n以下内容来自 001 启动确认.md 各原文节（由 S000 从品牌文件完整写入，不得做摘要或改写）：\n- 每条引用是否包含可核验的外部 URL（而非仅文字描述）\n- 若发现有 \"Industry knowledge\"、\"Research\" 等无具体来源的笼统表述，必须标记为不通过\n\n**Gate 原则**：若有下划线残留或明显格式污染，默认不通过。若 References 整体为笼统概括（缺少可核验 URL），默认不通过。若整体优秀、格式干净、引用可信，直接通过。不得输出伪问题。\n\n## 正文\n{004 正文.md 的正文内容}\n\n## 产出要求\n回复 JSON：{\"passed\": true/false, \"checklist\": {\"hook\": true/false, \"structure\": true/false, \"quality\": true/false, \"seo\": true/false, \"clean\": true/false}, \"issues\": [\"问题1\"], \"note\": \"说明\"}』\n\n使用 sessions_spawn(context=\"isolated\", mode=\"run\") 启动 Gate session。sessions_yield 等待完成。读取 Gate session 的回复 JSON。\n\n禁止使用 write 工具写入 009 Gate结果.md。禁止将 Gate 结果追加到 004 正文.md 或其他文件。必须通过 exec 管道传入 write_step_output.py 由脚本格式化写入。\n\n将回复 JSON 作为 stdin 执行：\n```bash\npython3 ../../tools/blog-writer/write_step_output.py --type gate --file \"009 Gate结果.md\" << 'JSONEOF'\n{json_text}\nJSONEOF\n```\n\n写入后验证 exec 退出码为 0 且 stdout 含 \"OK:\"。然后读取 009 Gate结果.md 确认文件存在且内容完整。",
+      "output": {
+        "id": "gate_result",
+        "name": "Gate 校验结果",
+        "path": "009 Gate结果.md",
+        "template": {}
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "rule": "Gate 结果中的 passed = true",
+      "on_fail": "pass=false",
+      "target": "file:009 Gate结果.md"
+    },
+    {
+      "id": 2,
+      "rule": "存在 ## Gate 结果 节",
+      "on_fail": "hard_fail",
+      "target": "file:009 Gate结果.md"
+    }
+  ],
+  "params": {
+    "brand_path": {
+      "type": "string",
+      "required": true,
+      "description": "品牌目录路径，如 /home/skylar/.openclaw/workspace-rafayel/brands/sms-boosting/"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "写作关键词，逗号分隔"
+    },
+    "user_note": {
+      "type": "string",
+      "default": "",
+      "description": "用户附加要求，如 偏向技术受众"
+    },
+    "brand_site_url": {
+      "type": "string",
+      "default": "",
+      "description": "品牌官网 URL，用于内链抓取"
+    }
+  }
+}
