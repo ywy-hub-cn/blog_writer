@@ -588,3 +588,128 @@ async def submit_review(
     if success:
         return {"status": req.decision, "task_id": task_id, "decision": req.decision}
     raise HTTPException(status_code=400, detail="无法提交审核（未等待审核）")
+
+
+@router.get("/{task_id}/files")
+async def list_task_files(task_id: str, _user: dict = Depends(get_optional_user)):
+    """获取任务生成的文件列表。"""
+    service = get_service()
+    assert_task_access(_user, service.get_task_status(task_id))
+    
+    instance_dir = _PROJECT_ROOT / "blog_writer" / "instance" / task_id
+    if not instance_dir.exists():
+        return {"files": [], "total": 0}
+    
+    files = []
+    for f in sorted(instance_dir.iterdir()):
+        if f.is_file() and not f.name.startswith('.'):
+            stat = f.stat()
+            files.append({
+                "name": f.name,
+                "size": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "ext": f.suffix.lower(),
+            })
+    return {"files": files, "total": len(files)}
+
+
+@router.get("/{task_id}/files/{filename}")
+async def get_task_file(
+    task_id: str,
+    filename: str,
+    download: bool = False,
+    _user: dict = Depends(get_optional_user),
+):
+    """查看或下载任务生成的文件内容。
+    - download=false（默认）：返回文本内容（用于前端预览）
+    - download=true：返回文件下载响应
+    """
+    from fastapi.responses import FileResponse, PlainTextResponse
+    
+    service = get_service()
+    assert_task_access(_user, service.get_task_status(task_id))
+    
+    # 安全校验：防止路径穿越
+    if '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    
+    instance_dir = _PROJECT_ROOT / "blog_writer" / "instance" / task_id
+    file_path = instance_dir / filename
+    
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    
+    if download:
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type="application/octet-stream",
+        )
+    
+    # 预览模式：文本文件返回内容，其他返回下载
+    text_exts = {'.md', '.txt', '.json', '.html', '.xml', '.csv', '.yaml', '.yml'}
+    if file_path.suffix.lower() in text_exts:
+        try:
+            content = file_path.read_text(encoding='utf-8')
+            return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
+        except UnicodeDecodeError:
+            return FileResponse(path=str(file_path), filename=filename)
+    
+    return FileResponse(path=str(file_path), filename=filename)
+
+
+@router.delete("/{task_id}")
+async def delete_task(task_id: str, _user: dict = Depends(get_optional_user)):
+    """删除任务（同时删除数据库记录和instance目录）。"""
+    import shutil
+    
+    service = get_service()
+    task_status = service.get_task_status(task_id)
+    assert_task_access(_user, task_status)
+    
+    # 如果任务正在运行，先取消
+    if task_status and task_status.get("status") in ("running", "waiting_review", "pending"):
+        try:
+            service.cancel_task(task_id)
+        except Exception:
+            pass
+    
+    # 删除数据库记录
+    try:
+        # 使用 service 中的数据库连接（与 list_tasks 同一个数据源）
+        db = getattr(service, "_db", None)
+        if db is not None:
+            conn = db.conn
+            conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM task_results WHERE task_id = ?", (task_id,))
+            db.conn.commit()
+        else:
+            # 兜底：尝试直接获取数据库管理器
+            from blog_writer.db import create_database_manager
+            db = create_database_manager()
+            conn = db.conn
+            conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM task_results WHERE task_id = ?", (task_id,))
+            conn.commit()
+    except Exception as e:
+        print(f"删除数据库记录失败: {e}")
+    
+    # 删除instance目录
+    instance_dir = _PROJECT_ROOT / "blog_writer" / "instance" / task_id
+    if instance_dir.exists():
+        try:
+            shutil.rmtree(instance_dir)
+        except Exception as e:
+            print(f"删除instance目录失败: {e}")
+    
+    # 从内存中移除
+    if hasattr(service, '_tasks') and task_id in service._tasks:
+        del service._tasks[task_id]
+    
+    # 清理任务缓存
+    if hasattr(service, '_task_cache'):
+        service._task_cache.pop(task_id, None)
+    
+    return {"task_id": task_id, "status": "deleted", "message": "任务已删除"}

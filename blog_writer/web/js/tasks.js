@@ -3,6 +3,10 @@
  */
 
 const Tasks = {
+    _currentTaskId: null,
+    _currentFileName: null,
+    _detailPollTimer: null,
+
     async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens) {
         if (!keywords) {
             UI.showToast('请输入关键词', 'warn');
@@ -11,18 +15,10 @@ const Tasks = {
 
         UI.addLog(`🚀 启动新任务: ${keywords}`, 'info');
         UI.addLog(`   模式: ${mode}`, 'info');
-        if (model) {
-            UI.addLog(`   模型: ${model}`, 'info');
-        }
-        if (temperature !== undefined) {
-            UI.addLog(`   温度系数: ${temperature}`, 'info');
-        }
-        if (maxTokens !== undefined) {
-            UI.addLog(`   最大输出 Token: ${maxTokens}`, 'info');
-        }
-        if (forbiddenWhitelist) {
-            UI.addLog(`   禁用词白名单: ${forbiddenWhitelist}`, 'info');
-        }
+        if (model) UI.addLog(`   模型: ${model}`, 'info');
+        if (temperature !== undefined) UI.addLog(`   温度系数: ${temperature}`, 'info');
+        if (maxTokens !== undefined) UI.addLog(`   最大输出 Token: ${maxTokens}`, 'info');
+        if (forbiddenWhitelist) UI.addLog(`   禁用词白名单: ${forbiddenWhitelist}`, 'info');
 
         try {
             const payload = {
@@ -31,27 +27,18 @@ const Tasks = {
                 user_note: userNote,
                 mode
             };
-            if (model && model !== 'default') {
-                payload.model = model;
-            }
-            if (temperature !== undefined) {
-                payload.temperature = temperature;
-            }
-            if (maxTokens !== undefined) {
-                payload.max_tokens = maxTokens;
-            }
-            if (forbiddenWhitelist && String(forbiddenWhitelist).trim()) {
-                payload.forbidden_whitelist = String(forbiddenWhitelist).trim();
-            }
+            if (model && model !== 'default') payload.model = model;
+            if (temperature !== undefined) payload.temperature = temperature;
+            if (maxTokens !== undefined) payload.max_tokens = maxTokens;
+            if (forbiddenWhitelist && String(forbiddenWhitelist).trim()) payload.forbidden_whitelist = String(forbiddenWhitelist).trim();
+            
             const result = await Api.post('/api/tasks/start', payload);
             
             UI.addLog(`   ✅ 任务已创建: ${result.task_id}`, 'info');
             this.poll(result.task_id);
             this.refresh();
             
-            // 通知父页面
             IframeBridge.taskCompleted(result.task_id, { status: 'started' });
-            
             return result;
         } catch (e) {
             UI.addLog(`   ❌ 启动失败: ${e.message}`, 'error');
@@ -61,15 +48,13 @@ const Tasks = {
 
     poll(taskId) {
         let lastLogIndex = 0;
-
         const tick = async () => {
             try {
                 const task = await Api.get(`/api/tasks/${taskId}`);
                 const logs = await Api.get(`/api/tasks/${taskId}/logs`);
                 
                 if (logs.logs && logs.logs.length > lastLogIndex) {
-                    const newLogs = logs.logs.slice(lastLogIndex);
-                    newLogs.forEach(l => UI.addLog(l));
+                    logs.logs.slice(lastLogIndex).forEach(l => UI.addLog(l));
                     lastLogIndex = logs.logs.length;
                 }
 
@@ -79,17 +64,12 @@ const Tasks = {
                     UI.addLog(`   📊 任务结束: ${UI.getStatusLabel(task.status)}`, 
                         task.status === 'completed' ? 'info' : 'warn');
                     this.refresh();
-                    
-                    IframeBridge.taskCompleted(taskId, {
-                        status: task.status,
-                        token_usage: task.token_usage
-                    });
+                    IframeBridge.taskCompleted(taskId, { status: task.status, token_usage: task.token_usage });
                 }
             } catch (e) {
                 console.error('Poll error:', e);
             }
         };
-
         setTimeout(tick, 3000);
     },
 
@@ -104,26 +84,7 @@ const Tasks = {
                 return;
             }
 
-            list.innerHTML = data.tasks.map(t => `
-                <div class="border rounded-lg p-4 card-hover cursor-pointer" onclick="Tasks.showDetail('${UI.escapeAttr(t.task_id)}')">
-                    <div class="flex justify-between items-start">
-                        <div class="flex-1">
-                            <div class="font-medium text-gray-800">${UI.escapeHtml(t.keywords || '未知任务')}</div>
-                            <div class="text-xs text-gray-500 mt-1">${UI.escapeHtml(t.task_id)}</div>
-                        </div>
-                        <span class="px-2 py-1 text-xs rounded ${UI.getStatusColor(t.status)}">
-                            ${UI.getStatusIcon(t.status)} ${UI.getStatusLabel(t.status)}
-                        </span>
-                    </div>
-                    <div class="mt-3 flex justify-between items-center text-xs text-gray-500">
-                        <div class="flex gap-3">
-                            <span>📊 ${UI.escapeHtml(t.current_step)}/${UI.escapeHtml(t.total_steps || '?')} 步骤</span>
-                            <span>🎯 ${UI.escapeHtml(t.mode)}</span>
-                        </div>
-                        ${t.token_usage ? `<span class="text-purple-600 font-medium">🔤 ${UI.formatTokens(t.token_usage)} tokens</span>` : ''}
-                    </div>
-                </div>
-            `).join('');
+            list.innerHTML = data.tasks.map(t => this._renderTaskCard(t)).join('');
             
             this._updateLastRefresh();
             Stats.update();
@@ -137,6 +98,50 @@ const Tasks = {
         }
     },
 
+    _renderTaskCard(t) {
+        const isRunning = t.status === 'running' || t.status === 'pending';
+        const isPaused = t.status === 'paused';
+        const isWaiting = t.status === 'waiting_review';
+        const isFinished = ['completed', 'failed', 'cancelled', 'completed_partial'].includes(t.status);
+
+        let actions = '';
+        if (isRunning || isWaiting) {
+            actions += `<button onclick="event.stopPropagation(); Tasks.cancel('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="停止任务">⏹️ 停止</button>`;
+        }
+        if (isPaused) {
+            actions += `<button onclick="event.stopPropagation(); Tasks.resume('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="继续任务">▶️ 继续</button>`;
+        }
+        if (isFinished) {
+            actions += `<button onclick="event.stopPropagation(); Tasks.resume('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="重新运行">🔄 重跑</button>`;
+        }
+        actions += `<button onclick="event.stopPropagation(); Tasks.showDetail('${UI.escapeAttr(t.task_id)}')" class="btn btn-primary btn-xs" title="查看详情">👁️ 详情</button>`;
+        actions += `<button onclick="event.stopPropagation(); Tasks.delete('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="删除任务">🗑️ 删除</button>`;
+
+        return `
+            <div class="border rounded-lg p-4 card-hover cursor-pointer" onclick="Tasks.showDetail('${UI.escapeAttr(t.task_id)}')">
+                <div class="flex justify-between items-start">
+                    <div class="flex-1">
+                        <div class="font-medium text-gray-800">${UI.escapeHtml(t.keywords || '未知任务')}</div>
+                        <div class="text-xs text-gray-500 mt-1">${UI.escapeHtml(t.task_id)}</div>
+                    </div>
+                    <span class="px-2 py-1 text-xs rounded ${UI.getStatusColor(t.status)}">
+                        ${UI.getStatusIcon(t.status)} ${UI.getStatusLabel(t.status)}
+                    </span>
+                </div>
+                <div class="mt-3 flex justify-between items-center text-xs text-gray-500">
+                    <div class="flex gap-3">
+                        <span>📊 ${UI.escapeHtml(t.current_step)}/${UI.escapeHtml(t.total_steps || '?')} 步骤</span>
+                        <span>🎯 ${UI.escapeHtml(t.mode)}</span>
+                    </div>
+                    ${t.token_usage ? `<span class="text-purple-600 font-medium">🔤 ${UI.formatTokens(t.token_usage)} tokens</span>` : ''}
+                </div>
+                <div class="mt-3 flex gap-2 flex-wrap">
+                    ${actions}
+                </div>
+            </div>
+        `;
+    },
+
     _updateLastRefresh() {
         const el = document.getElementById('taskLastUpdate');
         if (el) {
@@ -148,40 +153,281 @@ const Tasks = {
     },
 
     async showDetail(taskId) {
+        this._currentTaskId = taskId;
+        const modal = document.getElementById('taskDetailModal');
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        
+        await this._loadDetail(taskId);
+        
+        // 启动详情页轮询（运行中任务）
+        if (this._detailPollTimer) clearInterval(this._detailPollTimer);
+        this._detailPollTimer = setInterval(() => {
+            if (this._currentTaskId) {
+                this._loadDetail(this._currentTaskId, true);
+            }
+        }, 5000);
+    },
+
+    closeDetail() {
+        const modal = document.getElementById('taskDetailModal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        this._currentTaskId = null;
+        if (this._detailPollTimer) {
+            clearInterval(this._detailPollTimer);
+            this._detailPollTimer = null;
+        }
+    },
+
+    async _loadDetail(taskId, silent = false) {
         try {
             const task = await Api.get(`/api/tasks/${taskId}`);
-            const logs = await Api.get(`/api/tasks/${taskId}/logs`);
-
-            UI.addLog(`\n📋 任务详情: ${taskId}`, 'step');
-            UI.addLog(`   状态: ${UI.getStatusLabel(task.status)}`, 'info');
-            UI.addLog(`   步骤: ${task.current_step}/${task.total_steps || '?'}`, 'info');
-
-            if (task.results && task.results.length > 0) {
-                const totalTokens = task.results.reduce((sum, r) => sum + (r.token_usage?.total_tokens || 0), 0);
-                if (totalTokens > 0) {
-                    UI.addLog(`   🔤 Token消耗: ${UI.formatTokens(totalTokens)} tokens`, 'info');
-                    task.results.forEach((r, i) => {
-                        const stepTokens = r.token_usage?.total_tokens || 0;
-                        if (stepTokens > 0) {
-                            UI.addLog(`      步骤 ${i+1} (${r.node_id}): ${UI.formatTokens(stepTokens)} tokens`, 'info');
-                        }
-                    });
+            
+            // 标题
+            document.getElementById('taskDetailTitle').textContent = task.keywords || '未知任务';
+            document.getElementById('taskDetailSubtitle').textContent = `任务ID: ${task.task_id}`;
+            
+            // 状态
+            const statusEl = document.getElementById('taskDetailStatus');
+            statusEl.textContent = `${UI.getStatusIcon(task.status)} ${UI.getStatusLabel(task.status)}`;
+            statusEl.className = `px-3 py-1 text-sm rounded-full ${UI.getStatusColor(task.status)}`;
+            
+            // 进度
+            const progress = task.total_steps ? Math.round((task.current_step / task.total_steps) * 100) : 0;
+            document.getElementById('taskDetailProgress').textContent = `📊 ${task.current_step}/${task.total_steps || '?'} 步骤 (${progress}%)`;
+            document.getElementById('taskDetailProgressBar').style.width = `${progress}%`;
+            document.getElementById('taskDetailMode').textContent = `🎯 ${task.mode}`;
+            
+            // Token
+            if (task.token_usage) {
+                document.getElementById('taskDetailTokens').textContent = `🔤 ${UI.formatTokens(task.token_usage)} tokens`;
+            }
+            
+            // 操作按钮
+            this._renderDetailActions(task);
+            
+            // 文件列表
+            await this._loadTaskFiles(taskId);
+            
+            // 步骤
+            this._renderSteps(task);
+            
+            // 如果任务已结束，停止轮询
+            if (!['running', 'waiting_review', 'pending', 'paused'].includes(task.status)) {
+                if (this._detailPollTimer) {
+                    clearInterval(this._detailPollTimer);
+                    this._detailPollTimer = null;
                 }
             }
+        } catch (e) {
+            if (!silent) console.error('Load detail error:', e);
+        }
+    },
 
-            if (logs.logs) {
-                logs.logs.forEach(l => UI.addLog(l));
+    _renderDetailActions(task) {
+        const container = document.getElementById('taskDetailActions');
+        const tid = UI.escapeAttr(task.task_id);
+        let buttons = '';
+        
+        if (['running', 'waiting_review', 'pending'].includes(task.status)) {
+            buttons += `<button onclick="Tasks.cancel('${tid}')" class="btn btn-outline btn-sm">⏹️ 停止</button>`;
+        }
+        if (task.status === 'paused') {
+            buttons += `<button onclick="Tasks.resume('${tid}')" class="btn btn-outline btn-sm">▶️ 继续</button>`;
+        }
+        if (['completed', 'failed', 'cancelled', 'completed_partial'].includes(task.status)) {
+            buttons += `<button onclick="Tasks.resume('${tid}')" class="btn btn-outline btn-sm">🔄 重跑</button>`;
+        }
+        buttons += `<button onclick="Tasks.delete('${tid}')" class="btn btn-outline btn-sm text-red-500">🗑️ 删除</button>`;
+        
+        container.innerHTML = buttons;
+    },
+
+    async _loadTaskFiles(taskId) {
+        try {
+            const data = await Api.get(`/api/tasks/${taskId}/files`);
+            const container = document.getElementById('taskDetailFiles');
+            
+            if (!data.files || data.files.length === 0) {
+                container.innerHTML = '<p class="text-gray-400 text-center py-8 text-sm">暂无生成文件</p>';
+                return;
             }
+            
+            container.innerHTML = data.files.map(f => `
+                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                    <div class="flex items-center gap-3 flex-1 min-w-0">
+                        <span class="text-xl">${this._getFileIcon(f.name)}</span>
+                        <div class="min-w-0">
+                            <div class="font-medium text-sm text-gray-800 truncate">${UI.escapeHtml(f.name)}</div>
+                            <div class="text-xs text-gray-500">${UI.formatSize(f.size)} · ${new Date(f.modified_at).toLocaleString('zh-CN')}</div>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="Tasks.viewFile('${UI.escapeAttr(taskId)}', '${UI.escapeAttr(f.name)}')" class="btn btn-primary btn-xs">👁️ 查看</button>
+                        <button onclick="Tasks.downloadFile('${UI.escapeAttr(taskId)}', '${UI.escapeAttr(f.name)}')" class="btn btn-outline btn-xs">⬇️ 下载</button>
+                    </div>
+                </div>
+            `).join('');
+        } catch (e) {
+            console.error('Load files error:', e);
+            document.getElementById('taskDetailFiles').innerHTML = '<p class="text-red-400 text-center py-8 text-sm">加载文件列表失败</p>';
+        }
+    },
 
-            if (task.status === 'waiting_review') {
-                UI.addLog(`\n   ⏸️ 等待人工审核: ${task.review_node_name}`, 'warn');
-                UI.addLog(`   请前往「人工审核」Tab进行审核`, 'warn');
-                IframeBridge.reviewRequested(taskId, task.review_node_name);
+    _renderSteps(task) {
+        const container = document.getElementById('taskDetailSteps');
+        const results = task.results || [];
+        const completed = task.completed_steps || [];
+        
+        if (results.length === 0 && completed.length === 0) {
+            container.innerHTML = '<p class="text-gray-400 text-center py-8 text-sm">暂无执行记录</p>';
+            return;
+        }
+        
+        let html = '';
+        
+        // 已完成步骤
+        if (results.length > 0) {
+            html += '<div class="space-y-2">';
+            results.forEach((r, i) => {
+                const statusColor = r.status === 'success' ? 'text-green-600' : r.status === 'failed' ? 'text-red-600' : 'text-yellow-600';
+                const statusIcon = r.status === 'success' ? '✅' : r.status === 'failed' ? '❌' : '⏳';
+                html += `
+                    <div class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                        <span class="text-lg">${statusIcon}</span>
+                        <div class="flex-1">
+                            <div class="font-medium text-sm">步骤 ${i + 1}: ${UI.escapeHtml(r.node_id || '未知')}</div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                状态: <span class="${statusColor}">${UI.escapeHtml(r.status || '未知')}</span>
+                                ${r.token_usage?.total_tokens ? ` · Token: ${UI.formatTokens(r.token_usage.total_tokens)}` : ''}
+                                ${r.iterations ? ` · 迭代: ${r.iterations}` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+        }
+        
+        container.innerHTML = html;
+    },
+
+    switchDetailTab(tab) {
+        ['files', 'steps', 'logs'].forEach(t => {
+            const btn = document.getElementById(`tabDetail${t.charAt(0).toUpperCase() + t.slice(1)}`);
+            const content = document.getElementById(`taskDetail${t.charAt(0).toUpperCase() + t.slice(1)}`);
+            if (t === tab) {
+                btn.className = 'px-4 py-2 text-sm font-medium border-b-2 border-blue-500 text-blue-600';
+                content.classList.remove('hidden');
+            } else {
+                btn.className = 'px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700';
+                content.classList.add('hidden');
+            }
+        });
+        
+        // 切换到日志时加载日志
+        if (tab === 'logs' && this._currentTaskId) {
+            this._loadTaskLogs(this._currentTaskId);
+        }
+    },
+
+    async _loadTaskLogs(taskId) {
+        try {
+            const data = await Api.get(`/api/tasks/${taskId}/logs`);
+            const logs = data.logs || [];
+            document.getElementById('taskDetailLogContent').textContent = logs.join('\n');
+        } catch (e) {
+            document.getElementById('taskDetailLogContent').textContent = '加载日志失败: ' + e.message;
+        }
+    },
+
+    async viewFile(taskId, filename) {
+        this._currentTaskId = taskId;
+        this._currentFileName = filename;
+        
+        const modal = document.getElementById('fileViewerModal');
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        
+        document.getElementById('fileViewerTitle').textContent = filename;
+        document.getElementById('fileViewerSubtitle').textContent = `任务: ${taskId}`;
+        document.getElementById('fileViewerContent').textContent = '加载中...';
+        
+        try {
+            const response = await fetch(`/api/tasks/${taskId}/files/${encodeURIComponent(filename)}`);
+            if (response.ok) {
+                const text = await response.text();
+                document.getElementById('fileViewerContent').textContent = text;
+            } else {
+                document.getElementById('fileViewerContent').textContent = '加载失败: ' + response.status;
             }
         } catch (e) {
-            console.error('Show detail error:', e);
+            document.getElementById('fileViewerContent').textContent = '加载失败: ' + e.message;
         }
-    }
+    },
+
+    closeFileViewer() {
+        const modal = document.getElementById('fileViewerModal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        this._currentFileName = null;
+    },
+
+    downloadFile(taskId, filename) {
+        window.open(`/api/tasks/${taskId}/files/${encodeURIComponent(filename)}?download=true`, '_blank');
+    },
+
+    downloadCurrentFile() {
+        if (this._currentTaskId && this._currentFileName) {
+            this.downloadFile(this._currentTaskId, this._currentFileName);
+        }
+    },
+
+    _getFileIcon(filename) {
+        const ext = filename.split('.').pop().toLowerCase();
+        const icons = {
+            'md': '📝', 'txt': '📄', 'json': '📋', 'html': '🌐', 'xml': '📰',
+            'csv': '📊', 'yaml': '⚙️', 'yml': '⚙️', 'png': '🖼️', 'jpg': '🖼️',
+            'jpeg': '🖼️', 'gif': '🖼️', 'pdf': '📕', 'zip': '📦',
+        };
+        return icons[ext] || '📄';
+    },
+
+    async cancel(taskId) {
+        if (!confirm('确定要停止这个任务吗？')) return;
+        try {
+            await Api.post(`/api/tasks/${taskId}/cancel`);
+            UI.showToast('✅ 任务已停止', 'success');
+            this.refresh();
+            if (this._currentTaskId === taskId) this._loadDetail(taskId);
+        } catch (e) {
+            UI.showToast('❌ 停止失败: ' + e.message, 'error');
+        }
+    },
+
+    async resume(taskId) {
+        try {
+            await Api.post(`/api/tasks/${taskId}/resume`);
+            UI.showToast('✅ 任务已继续', 'success');
+            this.refresh();
+            if (this._currentTaskId === taskId) this._loadDetail(taskId);
+        } catch (e) {
+            UI.showToast('❌ 操作失败: ' + e.message, 'error');
+        }
+    },
+
+    async delete(taskId) {
+        if (!confirm('确定要删除这个任务吗？此操作不可恢复！')) return;
+        try {
+            await Api.delete(`/api/tasks/${taskId}`);
+            UI.showToast('✅ 任务已删除', 'success');
+            this.closeDetail();
+            this.refresh();
+        } catch (e) {
+            UI.showToast('❌ 删除失败: ' + e.message, 'error');
+        }
+    },
 };
 
 /**
@@ -191,12 +437,9 @@ const Stats = {
     async update() {
         try {
             if (Auth.isLoggedIn()) {
-                // 已登录：调用管理员统计接口
-                const endpoint = '/api/admin/config/stats';
-                const data = await Api.get(endpoint);
+                const data = await Api.get('/api/admin/config/stats');
                 this._renderStats(data);
             } else {
-                // 未登录：从任务列表计算基本统计
                 const data = await Api.get('/api/tasks');
                 const tasks = data.tasks || [];
                 const completed = tasks.filter(t => t.status === 'completed' || t.status === 'completed_partial').length;
@@ -206,7 +449,6 @@ const Stats = {
             }
         } catch (e) {
             console.error('Stats update error:', e);
-            // 出错时尝试从任务列表计算
             try {
                 const data = await Api.get('/api/tasks');
                 const tasks = data.tasks || [];
@@ -229,7 +471,6 @@ const Stats = {
             const llmTokens = data.llm_stats?.total_tokens_used || 0;
             const llmCalls = data.llm_stats?.total_calls || 0;
             const totalTokens = data.total_tokens_consumed || llmTokens;
-
             this._updateNavStats(data, totalTokens, llmCalls);
             this._updateMobileStats(data, totalTokens, llmCalls);
             this._updateSystemStats(totalTokens, llmCalls);
@@ -275,7 +516,6 @@ const Stats = {
     _updateSystemStats(totalTokens, llmCalls) {
         const el = (id) => document.getElementById(id);
         const avgCalls = llmCalls > 0 ? Math.round(totalTokens / llmCalls) : 0;
-        
         if (el('statTokens')) el('statTokens').textContent = UI.formatTokens(totalTokens);
         if (el('statCalls')) el('statCalls').textContent = llmCalls.toLocaleString();
         if (el('statAvgTokens')) el('statAvgTokens').textContent = avgCalls.toLocaleString();
@@ -284,13 +524,11 @@ const Stats = {
 
     _updateConfigStats(totalTokens, llmCalls, data) {
         const el = (id) => document.getElementById(id);
-        
         if (el('statTotalTokens')) el('statTotalTokens').textContent = totalTokens.toLocaleString();
         if (el('statTotalCalls')) el('statTotalCalls').textContent = llmCalls.toLocaleString();
         if (el('statAvgTokens')) el('statAvgTokens').textContent = 
             llmCalls > 0 ? Math.round(totalTokens / llmCalls).toLocaleString() : '0';
         if (el('statEstCost')) el('statEstCost').textContent = UI.estimateCost(totalTokens);
-        
         if (data.total_tasks !== undefined) {
             if (el('statTotal')) el('statTotal').textContent = data.total_tasks;
             if (el('statSuccessRate')) el('statSuccessRate').textContent = (data.success_rate || 0).toFixed(1) + '%';

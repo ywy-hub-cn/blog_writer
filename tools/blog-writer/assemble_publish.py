@@ -62,6 +62,8 @@ def extract_fields(
 ) -> Dict[str, str]:
     seo = bid.get("seo") if isinstance(bid.get("seo"), dict) else {}
     content = bid.get("content") if isinstance(bid.get("content"), dict) else {}
+    summary = bid.get("summary") if isinstance(bid.get("summary"), dict) else {}
+    bid_core = _dig(bid, "bid", "core", default="") if isinstance(bid.get("bid"), dict) else ""
 
     kw = (
         keyword
@@ -69,17 +71,21 @@ def extract_fields(
         or _dig(bid, "focus_keyword")
         or _dig(seo, "keyword")
         or _dig(content, "keyword")
+        or _dig(summary, "keyword")
+        or (bid_core.get("th") if isinstance(bid_core, dict) else "")
     )
     ttl = (
         title
         or _dig(bid, "title")
         or _dig(seo, "title")
         or _dig(content, "title")
+        or _dig(summary, "title")
         or kw
     )
     seo_title = (
         _dig(bid, "seo_title")
         or _dig(seo, "seo_title")
+        or _dig(summary, "seo_title")
         or _dig(seo, "title")
         or ttl
     )
@@ -87,12 +93,14 @@ def extract_fields(
         slug
         or _dig(bid, "slug")
         or _dig(seo, "slug")
+        or _dig(summary, "slug")
         or re.sub(r"[^a-z0-9]+", "-", kw.lower()).strip("-")
     )
     meta = (
         meta_description
         or _dig(bid, "meta_description")
         or _dig(seo, "meta_description")
+        or _dig(summary, "meta_description")
         or _dig(seo, "description")
         or ""
     )
@@ -102,7 +110,12 @@ def extract_fields(
         if meta.endswith("..."):
             meta = meta[:160]
 
-    excerpt = _dig(bid, "excerpt") or _dig(content, "excerpt") or meta[:120]
+    excerpt = (
+        _dig(bid, "excerpt")
+        or _dig(content, "excerpt")
+        or _dig(summary, "excerpt")
+        or meta[:120]
+    )
 
     return {
         "keyword": kw,

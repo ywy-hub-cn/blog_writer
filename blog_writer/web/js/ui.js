@@ -224,5 +224,13 @@ const UI = {
         if (!seconds || seconds < 60) return `${Math.round(seconds)}s`;
         if (seconds < 3600) return `${Math.round(seconds / 60)}m ${Math.round(seconds % 60)}s`;
         return `${Math.round(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
+    },
+
+    formatSize(bytes) {
+        if (!bytes || bytes === 0) return '0 B';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
     }
 };

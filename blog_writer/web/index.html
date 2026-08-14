@@ -485,13 +485,13 @@
     <!-- JS模块 -->
     <script src="/static/js/api.js?v=9"></script>
     <script src="/static/js/auth.js?v=9"></script>
-    <script src="/static/js/ui.js?v=9"></script>
-    <script src="/static/js/tasks.js?v=10"></script>
+    <script src="/static/js/ui.js?v=10"></script>
+    <script src="/static/js/tasks.js?v=11"></script>
     <script src="/static/js/brands.js?v=9"></script>
     <script src="/static/js/brand-manager.js?v=9"></script>
     <!-- <script src="/static/js/vue-brand-manager.js?v=9"></script> 暂时禁用，用于调试 -->
     <script src="/static/js/nodes.js?v=9"></script>
-    <script src="/static/js/reviews.js?v=9"></script>
+    <script src="/static/js/reviews.js?v=10"></script>
     <script src="/static/js/config.js?v=9"></script>
     <script src="/static/js/app.js?v=10"></script>
 
@@ -524,6 +524,71 @@
                     <button onclick="BrandManager.closeRenameModal()" class="btn btn-outline">取消</button>
                     <button onclick="BrandManager.confirmRename()" class="btn btn-primary">确认</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== 任务详情弹窗 ========== -->
+    <div id="taskDetailModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="Tasks.closeDetail()"></div>
+        <div class="modal-card" style="width: 60rem; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h3 id="taskDetailTitle" class="text-lg font-semibold">任务详情</h3>
+                    <p id="taskDetailSubtitle" class="text-sm text-gray-500 mt-1"></p>
+                </div>
+                <button onclick="Tasks.closeDetail()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+            
+            <!-- 任务状态和操作 -->
+            <div class="flex items-center gap-3 mb-4 flex-wrap">
+                <span id="taskDetailStatus" class="px-3 py-1 text-sm rounded-full"></span>
+                <span id="taskDetailProgress" class="text-sm text-gray-600"></span>
+                <span id="taskDetailMode" class="text-sm text-gray-500"></span>
+                <span id="taskDetailTokens" class="text-sm text-purple-600"></span>
+                <div class="flex-1"></div>
+                <div id="taskDetailActions" class="flex gap-2"></div>
+            </div>
+
+            <!-- 进度条 -->
+            <div class="w-full bg-gray-200 rounded-full h-2 mb-4">
+                <div id="taskDetailProgressBar" class="bg-blue-500 h-2 rounded-full transition-all" style="width: 0%"></div>
+            </div>
+
+            <!-- Tab切换 -->
+            <div class="flex gap-2 border-b border-gray-200 mb-4">
+                <button onclick="Tasks.switchDetailTab('files')" id="tabDetailFiles" class="px-4 py-2 text-sm font-medium border-b-2 border-blue-500 text-blue-600">📁 生成文件</button>
+                <button onclick="Tasks.switchDetailTab('steps')" id="tabDetailSteps" class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">📊 执行步骤</button>
+                <button onclick="Tasks.switchDetailTab('logs')" id="tabDetailLogs" class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">📝 运行日志</button>
+            </div>
+
+            <!-- 内容区域 -->
+            <div class="flex-1 overflow-y-auto" style="min-height: 300px;">
+                <div id="taskDetailFiles" class="space-y-2"></div>
+                <div id="taskDetailSteps" class="space-y-2 hidden"></div>
+                <div id="taskDetailLogs" class="hidden">
+                    <pre id="taskDetailLogContent" class="text-xs bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto" style="max-height: 400px;"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== 文件查看弹窗 ========== -->
+    <div id="fileViewerModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="Tasks.closeFileViewer()"></div>
+        <div class="modal-card" style="width: 50rem; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h3 id="fileViewerTitle" class="text-lg font-semibold">文件查看</h3>
+                    <p id="fileViewerSubtitle" class="text-sm text-gray-500 mt-1"></p>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="Tasks.downloadCurrentFile()" class="btn btn-primary btn-sm">⬇️ 下载</button>
+                    <button onclick="Tasks.closeFileViewer()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-y-auto" style="min-height: 300px;">
+                <pre id="fileViewerContent" class="text-sm bg-gray-50 p-4 rounded-lg whitespace-pre-wrap break-words" style="max-height: 60vh;"></pre>
             </div>
         </div>
     </div>
