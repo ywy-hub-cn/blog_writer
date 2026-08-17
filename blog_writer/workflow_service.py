@@ -46,6 +46,11 @@ DEFAULT_MAX_RETRIES = MAX_RETRIES
 DEFAULT_RETRY_DELAY_SECONDS = RETRY_DELAY
 
 
+def priority_label(priority: int) -> str:
+    """优先级数字转中文标签。"""
+    return {3: "高", 2: "中", 1: "低"}.get(priority, "中")
+
+
 class WorkflowService(TaskControlMixin):
     """工作流服务 - 支持状态持久化、断点续跑、自动重试、指定节点重跑"""
     
@@ -74,6 +79,19 @@ class WorkflowService(TaskControlMixin):
         # 同步控制面（approve/cancel/pause/...）串行化，避免竞态覆盖状态
         self._task_sync_locks: Dict[str, threading.Lock] = {}
         self._task_sync_locks_guard = threading.Lock()
+        # 并发任务数限制 + 优先级调度
+        self.max_concurrent_tasks = int(os.environ.get("MAX_CONCURRENT_TASKS", "5") or 5)
+        self._available_slots = self.max_concurrent_tasks
+        self._priority_queue: List[tuple] = []  # (priority, timestamp, task_id, event)
+        self._queue_lock = asyncio.Lock()
+        self._queue_counter = 0  # 同优先级时FIFO
+        # 并发统计
+        self._concurrency_stats = {
+            "total_started": 0,
+            "total_completed": 0,
+            "total_wait_time": 0.0,
+            "total_exec_time": 0.0,
+        }
         
         # 数据库持久化：sqlite 路径相对 config 目录解析，避免 CWD 分裂出多套库
         db_cfg = self.config.get_all()
@@ -477,6 +495,113 @@ class WorkflowService(TaskControlMixin):
     def is_task_executing(self, task_id: str) -> bool:
         with self._running_tasks_lock:
             return task_id in self._running_tasks
+
+    async def _acquire_slot(self, task_id: str, priority: int = 2) -> float:
+        """获取执行槽位，支持优先级调度。返回等待时长（秒）。"""
+        import time
+        wait_start = time.time()
+        
+        async with self._queue_lock:
+            if self._available_slots > 0:
+                self._available_slots -= 1
+                return 0.0
+            # 无空闲槽位，进入优先级队列等待
+            self._queue_counter += 1
+            event = asyncio.Event()
+            entry = (-priority, self._queue_counter, task_id, event)
+            self._priority_queue.append(entry)
+            self._priority_queue.sort()  # 按优先级降序，同优先级FIFO
+        
+        await event.wait()
+        return time.time() - wait_start
+
+    def _release_slot(self):
+        """释放槽位，唤醒队列中最高优先级任务。"""
+        import asyncio
+        # 先尝试直接释放槽位
+        if self._priority_queue:
+            # 有排队任务，唤醒最高优先级的
+            entry = self._priority_queue.pop(0)
+            _, _, task_id, event = entry
+            event.set()
+        else:
+            self._available_slots += 1
+
+    def get_concurrency_info(self) -> Dict[str, Any]:
+        """获取并发和排队信息（用于前端展示）。"""
+        # 从 _tasks 中统计真实运行状态，比 _running_tasks 执行标记更可靠
+        running_from_tasks = sum(
+            1 for t in self._tasks.values()
+            if t.get("status") in ("running", "waiting_review", "pending")
+        )
+        running = max(len(self._running_tasks), running_from_tasks)
+        queued = len(self._priority_queue)
+        stats = self._concurrency_stats
+        avg_wait = stats["total_wait_time"] / stats["total_completed"] if stats["total_completed"] > 0 else 0
+        avg_exec = stats["total_exec_time"] / stats["total_completed"] if stats["total_completed"] > 0 else 0
+        return {
+            "max_concurrent": self.max_concurrent_tasks,
+            "running": running,
+            "queued": queued,
+            "available": max(0, self.max_concurrent_tasks - running),
+            "stats": {
+                "total_started": stats["total_started"],
+                "total_completed": stats["total_completed"],
+                "avg_wait_seconds": round(avg_wait, 1),
+                "avg_exec_seconds": round(avg_exec, 1),
+            }
+        }
+
+    def get_queued_tasks(self) -> List[Dict[str, Any]]:
+        """获取排队任务列表（按优先级排序）。"""
+        result = []
+        for neg_pri, counter, task_id, event in self._priority_queue:
+            task = self._tasks.get(task_id, {})
+            result.append({
+                "task_id": task_id,
+                "priority": -neg_pri,
+                "priority_label": {3: "高", 2: "中", 1: "低"}.get(-neg_pri, "中"),
+                "keywords": task.get("keywords", ""),
+                "queued_at": task.get("start_time", ""),
+                "position": len(result) + 1,
+            })
+        return result
+
+    def cancel_queued_task(self, task_id: str) -> bool:
+        """取消排队中的任务。"""
+        for i, entry in enumerate(self._priority_queue):
+            if entry[2] == task_id:
+                _, _, _, event = self._priority_queue.pop(i)
+                event.set()  # 唤醒但标记为取消
+                # 设置任务状态为cancelled
+                if task_id in self._tasks:
+                    self._tasks[task_id]["status"] = "cancelled"
+                    self._save_state(task_id)
+                return True
+        return False
+
+    def set_task_priority(self, task_id: str, priority: int) -> bool:
+        """修改排队任务的优先级（1=低, 2=中, 3=高）。"""
+        priority = max(1, min(3, priority))
+        for i, entry in enumerate(self._priority_queue):
+            if entry[2] == task_id:
+                neg_pri, counter, tid, event = entry
+                self._priority_queue[i] = (-priority, counter, tid, event)
+                self._priority_queue.sort()
+                return True
+        return False
+
+    def set_max_concurrent(self, n: int) -> Dict[str, Any]:
+        """动态调整最大并发数（运行时生效）。"""
+        n = max(1, min(20, n))
+        old = self.max_concurrent_tasks
+        self.max_concurrent_tasks = n
+        # 如果增加了并发数，释放相应槽位
+        if n > old:
+            for _ in range(n - old):
+                self._release_slot()
+        # 如果减少了，已运行的任务不受影响，_available_slots会自然减少
+        return {"old": old, "new": n, "running": len(self._running_tasks), "queued": len(self._priority_queue)}
 
     def _try_begin_execution(self, task_id: str) -> bool:
         """标记任务开始执行；若已在跑则返回 False。"""
@@ -898,6 +1023,7 @@ class WorkflowService(TaskControlMixin):
         model: str = "default",
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        priority: int = 2,
     ) -> Dict[str, Any]:
         """启动工作流
         
@@ -915,6 +1041,7 @@ class WorkflowService(TaskControlMixin):
             model: 使用的模型key ("default" 或 "pro")
             temperature: 单次任务温度覆盖
             max_tokens: 单次任务 max_tokens 覆盖
+            priority: 任务优先级 (1=低, 2=中, 3=高)，排队时高优先级先执行
         """
         try:
             self._main_loop = asyncio.get_running_loop()
@@ -969,9 +1096,10 @@ class WorkflowService(TaskControlMixin):
                 extra["temperature"] = temperature
             if max_tokens is not None:
                 extra["max_tokens"] = max_tokens
+            extra["priority"] = priority
             self._tasks[task_id] = {
                 "task_id": task_id,
-                "status": "running",
+                "status": "queued",
                 "mode": mode,
                 "current_step": 0,
                 "total_steps": 0,
@@ -1048,19 +1176,49 @@ class WorkflowService(TaskControlMixin):
         outputs = {}
         node_results = []
         
-        await self._execute_steps(
-            task_id=task_id,
-            step_files=step_files,
-            params=params,
-            outputs=outputs,
-            node_results=node_results,
-            instance_dir=instance_dir,
-            mode=mode,
-            task_log=task_log,
-            start_step_idx=0
-        )
+        # 并发控制：优先级调度，超过最大并发数时排队等待
+        priority = (self._tasks.get(task_id, {}).get("extra") or {}).get("priority", 2)
+        self._concurrency_stats["total_started"] += 1
+        task_logger.info(f"📋 任务排队中（优先级: {priority_label(priority)}，当前并发 {len(self._running_tasks)}/{self.max_concurrent_tasks}）")
+        wait_time = await self._acquire_slot(task_id, priority)
         
-        return self._finalize_task(task_id, node_results, outputs, step_files, task_log)
+        # 检查是否被取消
+        if self._tasks.get(task_id, {}).get("status") == "cancelled":
+            task_logger.info("❌ 任务已被取消，退出执行")
+            self._release_slot()
+            return {"task_id": task_id, "status": "cancelled", "message": "任务已取消"}
+        
+        try:
+            # 获取到槽位后，标记为运行中
+            if self._tasks.get(task_id, {}).get("status") == "queued":
+                self._tasks[task_id]["status"] = "running"
+                self._save_state(task_id)
+            if wait_time > 0:
+                task_logger.info(f"🚀 任务开始执行（排队等待 {wait_time:.1f}s）")
+            else:
+                task_logger.info(f"🚀 任务开始执行")
+            exec_start = time.time()
+            
+            await self._execute_steps(
+                task_id=task_id,
+                step_files=step_files,
+                params=params,
+                outputs=outputs,
+                node_results=node_results,
+                instance_dir=instance_dir,
+                mode=mode,
+                task_log=task_log,
+                start_step_idx=0
+            )
+            
+            result = self._finalize_task(task_id, node_results, outputs, step_files, task_log)
+            # 记录统计
+            self._concurrency_stats["total_completed"] += 1
+            self._concurrency_stats["total_wait_time"] += wait_time
+            self._concurrency_stats["total_exec_time"] += time.time() - exec_start
+            return result
+        finally:
+            self._release_slot()
     
     async def _resume_workflow(
         self,
@@ -1753,10 +1911,8 @@ class WorkflowService(TaskControlMixin):
             latest_for_stats[step] = r
         stats_results = list(latest_for_stats.values())
 
-        total_tokens = sum(
-            r.get("token_usage", {}).get("total_tokens_used", 0)
-            for r in stats_results
-        )
+        # token按累积值取最大值（每个步骤的token_usage是累积的，不能求和）
+        total_tokens = self._calc_task_token_usage(stats_results)
         total_steps_completed = len([r for r in stats_results if r.get("status") in ["success", "partial"]])
         
         task_log(f"\n{'='*60}")
@@ -1972,24 +2128,29 @@ class WorkflowService(TaskControlMixin):
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         task = self._tasks.get(task_id)
         if task:
+            task["token_usage"] = self._calc_task_token_usage(task.get("results", []))
             return task
         # 尝试从数据库恢复
         if self._use_db:
             db_task = self._task_repo.load_task(task_id)
             if db_task:
+                db_task["token_usage"] = self._calc_task_token_usage(db_task.get("results", []))
                 self._tasks[task_id] = db_task
                 self._task_cache.pop(task_id, None)
                 return db_task
         # 尝试从磁盘恢复
         state = self._load_state(task_id)
         if state:
+            state["token_usage"] = self._calc_task_token_usage(state.get("results", []))
             self._tasks[task_id] = state
             self._task_cache.pop(task_id, None)
             return state
         # 内存已清理时返回最小缓存（避免误报不存在）
         cached = self._task_cache.get(task_id)
         if cached:
-            return dict(cached)
+            result = dict(cached)
+            result["token_usage"] = self._calc_task_token_usage(result.get("results", []))
+            return result
         return None
     
     def get_task_logs(self, task_id: str) -> List[str]:
@@ -2006,6 +2167,24 @@ class WorkflowService(TaskControlMixin):
                 pass
         return logs
     
+    @staticmethod
+    def _calc_task_token_usage(results: List[Dict[str, Any]]) -> int:
+        """计算任务总Token消耗。
+        
+        注意：每个步骤的token_usage.total_tokens_used是累积值（整个任务复用
+        同一个LLM实例），因此取所有步骤中的最大值即为任务总消耗，不能求和。
+        """
+        if not results:
+            return 0
+        max_tokens = 0
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            tokens = (r.get("token_usage") or {}).get("total_tokens_used", 0)
+            if tokens and tokens > max_tokens:
+                max_tokens = tokens
+        return max_tokens
+    
     def list_tasks(self) -> List[Dict[str, Any]]:
         tasks = []
         seen_ids = set()
@@ -2014,10 +2193,7 @@ class WorkflowService(TaskControlMixin):
         for task_id, task in self._tasks.items():
             seen_ids.add(task_id)
             results = task.get("results", [])
-            token_usage = sum(
-                r.get("token_usage", {}).get("total_tokens_used", 0)
-                for r in results
-            )
+            token_usage = self._calc_task_token_usage(results)
             tasks.append({
                 "task_id": task_id,
                 "status": task["status"],
@@ -2039,10 +2215,7 @@ class WorkflowService(TaskControlMixin):
                     if task_id not in seen_ids:
                         seen_ids.add(task_id)
                         results = db_task.get("results", [])
-                        token_usage = sum(
-                            r.get("token_usage", {}).get("total_tokens_used", 0)
-                            for r in results if isinstance(r, dict)
-                        )
+                        token_usage = self._calc_task_token_usage(results)
                         tasks.append({
                             "task_id": task_id,
                             "status": db_task.get("status", "unknown"),
@@ -2066,10 +2239,7 @@ class WorkflowService(TaskControlMixin):
                     if state:
                         seen_ids.add(task_dir.name)
                         results = state.get("results", [])
-                        token_usage = sum(
-                            r.get("token_usage", {}).get("total_tokens_used", 0)
-                            for r in results
-                        )
+                        token_usage = self._calc_task_token_usage(results)
                         tasks.append({
                             "task_id": task_dir.name,
                             "status": state["status"],

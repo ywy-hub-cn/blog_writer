@@ -74,9 +74,9 @@ const Reviews = {
         }
         
         this._expandedTaskId = taskId;
-        this.refresh();
+        await this.refresh();
         
-        // 加载内容
+        // 加载内容（refresh完成后DOM元素已创建）
         await this._loadReviewContent(taskId);
     },
 
@@ -94,18 +94,26 @@ const Reviews = {
                 return;
             }
             
-            // 找到最新的md文件（通常是待审核的内容）
-            const mdFiles = files.filter(f => f.name.endsWith('.md') || f.name.endsWith('.txt'))
+            // 支持的文本文件类型（审核内容可能是md/txt/html/json）
+            const textExts = ['.md', '.txt', '.html', '.htm', '.json', '.csv'];
+            const textFiles = files.filter(f => textExts.some(ext => f.name.toLowerCase().endsWith(ext)))
                 .sort((a, b) => new Date(b.modified_at) - new Date(a.modified_at));
             
-            if (mdFiles.length === 0) {
-                bodyEl.innerHTML = '<p class="text-gray-400 text-sm">暂无文本文件</p>';
+            if (textFiles.length === 0) {
+                // 没有文本文件，显示所有文件列表
+                let html = '<p class="text-gray-400 text-sm mb-2">暂无文本文件，以下是所有生成文件：</p>';
+                html += '<div class="flex gap-2 flex-wrap">';
+                files.forEach(f => {
+                    html += `<span class="px-2 py-1 bg-gray-100 rounded text-xs">${UI.escapeHtml(f.name)} (${(f.size/1024).toFixed(1)}KB)</span>`;
+                });
+                html += '</div>';
+                bodyEl.innerHTML = html;
                 return;
             }
             
             // 显示文件列表和最新文件内容
             let html = '<div class="mb-3 flex gap-2 flex-wrap">';
-            mdFiles.forEach(f => {
+            textFiles.forEach(f => {
                 html += `<button onclick="Reviews.loadFileContent('${UI.escapeAttr(taskId)}', '${UI.escapeAttr(f.name)}')" 
                     class="btn btn-outline btn-xs text-xs">${UI.escapeHtml(f.name)}</button>`;
             });
@@ -114,7 +122,7 @@ const Reviews = {
             bodyEl.innerHTML = html;
             
             // 自动加载最新文件
-            await this.loadFileContent(taskId, mdFiles[0].name);
+            await this.loadFileContent(taskId, textFiles[0].name);
         } catch (e) {
             bodyEl.innerHTML = `<p class="text-red-400 text-sm">加载失败: ${UI.escapeHtml(e.message)}</p>`;
         }
@@ -130,9 +138,23 @@ const Reviews = {
             const response = await fetch(`/api/tasks/${taskId}/files/${encodeURIComponent(filename)}`);
             if (response.ok) {
                 const text = await response.text();
-                contentEl.textContent = text;
+                // JSON文件格式化显示
+                if (filename.toLowerCase().endsWith('.json')) {
+                    try {
+                        const parsed = JSON.parse(text);
+                        contentEl.textContent = JSON.stringify(parsed, null, 2);
+                    } catch {
+                        contentEl.textContent = text;
+                    }
+                } else {
+                    contentEl.textContent = text;
+                }
+            } else if (response.status === 401) {
+                contentEl.textContent = '加载失败：需要登录认证';
+            } else if (response.status === 403) {
+                contentEl.textContent = '加载失败：无权限查看该任务';
             } else {
-                contentEl.textContent = '加载失败: ' + response.status;
+                contentEl.textContent = '加载失败: HTTP ' + response.status;
             }
         } catch (e) {
             contentEl.textContent = '加载失败: ' + e.message;

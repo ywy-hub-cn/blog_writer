@@ -1,6 +1,6 @@
 {
   "_comment": "WordPress 发布配置示例 - 复制到品牌目录下并重命名为 wp-config.json，然后填写实际值",
-  "_doc": "详见 docs/CONFIGURATION.md 第6节",
+  "_doc": "详见 docs/使用指南.md 第五部分",
 
   "site_url": "https://blog.yourcompany.com",
   "username": "content-editor",

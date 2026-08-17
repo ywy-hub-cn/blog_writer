@@ -59,6 +59,11 @@ def main():
         default='',
         help='本次任务禁用词白名单（逗号/换行分隔，仅本任务生效）',
     )
+    parser.add_argument(
+        '--method-path',
+        default='',
+        help='方法母版路径（.method目录），如有则复制references到实例目录',
+    )
     
     args = parser.parse_args()
     
@@ -76,6 +81,35 @@ def main():
         sys.exit(1)
     
     os.makedirs(os.path.join(out_dir, 'brand'), exist_ok=True)
+    
+    # 复制 .method/references 到实例目录（供S001等步骤读取参考文件）
+    method_path = args.method_path
+    if not method_path:
+        # 自动探测：从脚本位置向上查找 .method 目录
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        for candidate in [
+            os.path.join(script_dir, '..', '..', '.method'),
+            os.path.join(script_dir, '..', '.method'),
+            os.path.join(os.getcwd(), '.method'),
+        ]:
+            if os.path.isdir(candidate):
+                method_path = candidate
+                break
+    
+    if method_path and os.path.isdir(method_path):
+        refs_src = os.path.join(method_path, 'references')
+        if os.path.isdir(refs_src):
+            refs_dst = os.path.join(out_dir, '.method', 'references')
+            os.makedirs(refs_dst, exist_ok=True)
+            copied_refs = 0
+            for ref_file in os.listdir(refs_src):
+                if ref_file.endswith('.md') or ref_file.endswith('.json'):
+                    src = os.path.join(refs_src, ref_file)
+                    dst = os.path.join(refs_dst, ref_file)
+                    shutil.copy2(src, dst)
+                    copied_refs += 1
+            if copied_refs > 0:
+                print(f'   copied references: {copied_refs} files from {refs_src}')
     
     manifest = {
         'files': [],

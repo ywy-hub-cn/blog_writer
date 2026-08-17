@@ -199,6 +199,15 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
+                                    <label class="form-label">任务优先级</label>
+                                    <select id="taskPriority" class="form-select">
+                                        <option value="3">🔴 高（紧急任务，优先执行）</option>
+                                        <option value="2" selected>🟡 中（普通任务）</option>
+                                        <option value="1">🟢 低（后台任务，空闲时执行）</option>
+                                    </select>
+                                    <p class="form-hint">排队时高优先级任务先执行，同优先级按启动顺序FIFO</p>
+                                </div>
+                                <div class="form-group">
                                     <label class="form-label">AI 模型</label>
                                     <select id="aiModel" class="form-select">
                                         <option value="default">deepseek-v4-flash（默认，速度快）</option>
@@ -254,6 +263,7 @@
                                 <div class="card-header">
                                     <h3 class="card-title">📋 任务列表</h3>
                                     <div class="flex items-center gap-3">
+                                        <span id="concurrencyInfo" class="text-xs text-gray-500"></span>
                                         <span id="taskLastUpdate" class="text-xs text-gray-400"></span>
                                         <button onclick="refreshTasks()" class="btn btn-secondary btn-sm" title="刷新任务列表">🔄 刷新</button>
                                     </div>
@@ -384,6 +394,14 @@
                             <div class="form-group"><label class="form-label">每步最大迭代次数</label><input id="wfMaxIterations" type="number" class="form-input"></div>
                             <div class="form-group"><label class="form-label">步骤超时（分钟）</label><input id="wfStepTimeout" type="number" class="form-input"></div>
                             <div class="form-group"><label class="form-label">实例根目录</label><input id="wfInstanceRoot" type="text" class="form-input"></div>
+                            <div class="form-group admin-only">
+                                <label class="form-label">最大并发任务数</label>
+                                <div class="flex gap-2 items-center">
+                                    <input id="maxConcurrentTasks" type="number" min="1" max="20" value="3" class="form-input">
+                                    <button onclick="saveConcurrencyConfig()" class="btn btn-primary btn-sm whitespace-nowrap">💾 应用</button>
+                                </div>
+                                <p class="form-hint">运行时动态调整，无需重启。超过此数的任务会排队等待</p>
+                            </div>
                             <button onclick="saveWorkflowConfig()" class="btn btn-primary btn-block">💾 保存工作流配置</button>
                         </div>
 
@@ -486,12 +504,12 @@
     <script src="/static/js/api.js?v=9"></script>
     <script src="/static/js/auth.js?v=9"></script>
     <script src="/static/js/ui.js?v=10"></script>
-    <script src="/static/js/tasks.js?v=11"></script>
+    <script src="/static/js/tasks.js?v=15"></script>
     <script src="/static/js/brands.js?v=9"></script>
     <script src="/static/js/brand-manager.js?v=9"></script>
     <!-- <script src="/static/js/vue-brand-manager.js?v=9"></script> 暂时禁用，用于调试 -->
     <script src="/static/js/nodes.js?v=9"></script>
-    <script src="/static/js/reviews.js?v=10"></script>
+    <script src="/static/js/reviews.js?v=12"></script>
     <script src="/static/js/config.js?v=9"></script>
     <script src="/static/js/app.js?v=10"></script>
 
@@ -546,6 +564,7 @@
                 <span id="taskDetailProgress" class="text-sm text-gray-600"></span>
                 <span id="taskDetailMode" class="text-sm text-gray-500"></span>
                 <span id="taskDetailTokens" class="text-sm text-purple-600"></span>
+                <span id="taskDetailDuration" class="text-sm text-gray-500"></span>
                 <div class="flex-1"></div>
                 <div id="taskDetailActions" class="flex gap-2"></div>
             </div>

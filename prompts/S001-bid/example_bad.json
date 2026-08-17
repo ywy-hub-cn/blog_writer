@@ -1,0 +1,13 @@
+{
+  "_comment": "这是一个错误示例，展示了常见的BID输出问题，不要这样写",
+  "errors": [
+    "1. 用 Markdown 代码块包裹 JSON",
+    "2. 字段名拼写错误（如 bid.core 写成 bid_core）",
+    "3. 枚举值不在合法范围内（如 ct 写成 'article' 而非 'guide'）",
+    "4. 点位留空（如 al 为空字符串）",
+    "5. summary 缺少必要字段（如没有 meta_description）",
+    "6. validation.passed 直接设为 true（应该由后续校验步骤设置）",
+    "7. 在 JSON 前后加解释文字"
+  ],
+  "wrong_output_example": "```json\n{\n  \"bid_core\": {\"at\": \"blog\", \"ct\": \"article\", \"al\": \"\"},\n  \"summary\": {\"title\": \"Some Title\", \"keyword\": \"sms api\"}\n}\n```\n\n以上是BID结果，请检查。"
+}

@@ -12,7 +12,7 @@ from pydantic import BaseModel, field_validator, ConfigDict, Field
 
 from blog_writer.service_manager import get_service
 from blog_writer.api.webhooks import get_webhook_manager
-from blog_writer.api.deps import get_current_user, security
+from blog_writer.api.deps import get_current_user, security, verify_admin_access
 from blog_writer.api.task_access import (
     assert_task_access,
     filter_tasks_for_user,
@@ -114,6 +114,7 @@ class StartTaskRequest(BaseModel):
     model: str = Field(default="default", alias="model")
     temperature: Optional[float] = Field(default=None, alias="temperature", ge=0, le=2)
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens", ge=1, le=256000)
+    priority: int = Field(default=2, alias="priority", ge=1, le=3)
     callback_url: Optional[str] = Field(default=None, alias="callbackUrl")
     callback_secret: Optional[str] = Field(default=None, alias="callbackSecret")
 
@@ -344,6 +345,7 @@ async def start_task(
         "model": req.model,
         "temperature": req.temperature,
         "max_tokens": req.max_tokens,
+        "priority": req.priority,
     }
 
     if not req.resume_from:
@@ -408,6 +410,58 @@ async def start_task(
     }
     if req.callback_url:
         result["webhook"] = {"url": req.callback_url, "registered": True}
+    return result
+
+
+@router.get("/concurrency")
+async def get_concurrency_info(_user: dict = Depends(get_optional_user)):
+    """获取并发和排队信息。"""
+    service = get_service()
+    return service.get_concurrency_info()
+
+
+@router.get("/queued")
+async def get_queued_tasks(_user: dict = Depends(get_optional_user)):
+    """获取排队中的任务列表（按优先级排序）。"""
+    service = get_service()
+    return {"tasks": service.get_queued_tasks()}
+
+
+@router.post("/{task_id}/cancel-queue")
+async def cancel_queued_task(task_id: str, _user: dict = Depends(get_optional_user)):
+    """取消排队中的任务。"""
+    service = get_service()
+    task = service.get_task_status(task_id)
+    assert_task_access(_user, task)
+    if service.cancel_queued_task(task_id):
+        return {"task_id": task_id, "status": "cancelled", "message": "排队任务已取消"}
+    raise HTTPException(status_code=400, detail="任务不在排队中，无法取消")
+
+
+class PriorityRequest(BaseModel):
+    priority: int = Field(ge=1, le=3, description="优先级: 1=低, 2=中, 3=高")
+
+
+@router.put("/{task_id}/priority")
+async def set_task_priority(task_id: str, req: PriorityRequest, _user: dict = Depends(get_optional_user)):
+    """修改排队任务的优先级。"""
+    service = get_service()
+    task = service.get_task_status(task_id)
+    assert_task_access(_user, task)
+    if service.set_task_priority(task_id, req.priority):
+        return {"task_id": task_id, "priority": req.priority, "message": "优先级已更新"}
+    raise HTTPException(status_code=400, detail="任务不在排队中，无法修改优先级")
+
+
+class ConcurrencyRequest(BaseModel):
+    max_concurrent: int = Field(ge=1, le=20, description="最大并发任务数")
+
+
+@router.put("/concurrency")
+async def set_max_concurrent(req: ConcurrencyRequest, admin: dict = Depends(verify_admin_access)):
+    """动态调整最大并发数（管理员）。"""
+    service = get_service()
+    result = service.set_max_concurrent(req.max_concurrent)
     return result
 
 

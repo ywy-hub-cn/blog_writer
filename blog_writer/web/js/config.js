@@ -22,6 +22,17 @@ const Config = {
             this._fillLLMForm(data);
             this._fillWorkflowForm(data);
             Stats.update();
+
+            // 加载当前并发数
+            try {
+                const concurrency = await Api.get('/api/tasks/concurrency');
+                const el = document.getElementById('maxConcurrentTasks');
+                if (el && concurrency.max_concurrent) {
+                    el.value = concurrency.max_concurrent;
+                }
+            } catch (e) {
+                // 忽略并发信息加载失败
+            }
         } catch (e) {
             console.error('Load config error:', e);
         }

@@ -8,7 +8,7 @@
 > - 失败策略：重试耗尽后 fail-closed（任务 `failed`），或按 `on_fail` 回跳重写  
 > - S008/S009：节点 `resources.isolated_session=true`，`AgentExecutor` 启用隔离会话（全新消息、不预读产物）  
 > - 发布：`tools/blog-writer/assemble_publish.py`、`publish_to_wp.py`  
-> - 平台对接与环境变量见 `docs/平台对接文档.md`、`docs/变更说明-2026-08-04.md`  
+> - 平台对接与环境变量见 `docs/integration/对接指南.md`  
 >
 > 下文中的 `sessions_spawn` 等表述保留 method-skill 语义；FastAPI 服务以隔离 `AgentExecutor` 等价实现。
 

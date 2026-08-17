@@ -105,6 +105,7 @@ function startTask() {
     }
     const temperature = document.getElementById('temperature')?.value;
     const maxTokens = document.getElementById('maxTokens')?.value;
+    const priority = document.getElementById('taskPriority')?.value || '2';
     Tasks.start(
         brandPath,
         document.getElementById('keywords').value,
@@ -113,7 +114,8 @@ function startTask() {
         document.getElementById('forbiddenWhitelist')?.value || '',
         document.getElementById('aiModel')?.value || 'default',
         temperature ? parseFloat(temperature) : undefined,
-        maxTokens ? parseInt(maxTokens) : undefined
+        maxTokens ? parseInt(maxTokens) : undefined,
+        parseInt(priority)
     );
 }
 function refreshTasks() { Tasks.refresh(); }
@@ -129,6 +131,20 @@ function createNewNode() { Nodes.createNew(); }
 function loadConfig() { Config.load(); }
 function saveLLMConfig() { Config.saveLLM(); }
 function saveWorkflowConfig() { Config.saveWorkflow(); }
+async function saveConcurrencyConfig() {
+    const n = parseInt(document.getElementById('maxConcurrentTasks').value);
+    if (!n || n < 1 || n > 20) {
+        UI.showToast('并发数必须在1-20之间', 'warn');
+        return;
+    }
+    try {
+        await Api.put('/api/tasks/concurrency', { max_concurrent: n });
+        UI.showToast(`✅ 最大并发数已调整为 ${n}`, 'success');
+        Tasks.refresh();
+    } catch (e) {
+        UI.showToast('❌ 调整失败: ' + e.message, 'error');
+    }
+}
 function testLLMConnection() { Config.testLLM(); }
 function downloadLogs() { UI.downloadLogs(); }
 function clearLogs() { UI.clearLogs(); }

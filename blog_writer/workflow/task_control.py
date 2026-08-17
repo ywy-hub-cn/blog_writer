@@ -103,7 +103,8 @@ class TaskControlMixin:
     def pause_task(self, task_id: str) -> bool:
         with self._get_task_sync_lock(task_id):
             task = self._ensure_task_loaded(task_id)
-            if task and task["status"] == "running":
+            if task and task["status"] in ("running", "waiting_review"):
+                task["_prev_status"] = task["status"]
                 task["status"] = "paused"
                 self._save_state(task_id)
                 self._fire_task_webhook(task_id, "task.paused", {"task_id": task_id})
@@ -116,11 +117,23 @@ class TaskControlMixin:
             if not task or task["status"] != "paused":
                 return False
 
-            if self.is_task_executing(task_id):
-                logger.warning("task %s already executing, resume rejected", task_id)
-                return False
+            # 恢复到暂停前的状态（running 或 waiting_review）
+            prev_status = task.get("_prev_status", "running")
+            if prev_status not in ("running", "waiting_review"):
+                prev_status = "running"
 
-            task["status"] = "running"
+            # 如果执行循环仍在运行（等待当前步骤完成），只需改回状态
+            if self.is_task_executing(task_id):
+                logger.info("task %s still executing, resume by changing status to %s", task_id, prev_status)
+                task["status"] = prev_status
+                _ev = self._pause_events.get(task_id)
+                if _ev is not None:
+                    _ev.set()
+                self._save_state(task_id)
+                self._fire_task_webhook(task_id, "task.resumed", {"task_id": task_id})
+                return True
+
+            task["status"] = prev_status
             _ev = self._pause_events.get(task_id)
             if _ev is not None:
                 _ev.set()

@@ -99,21 +99,24 @@ async def update_workflow_config(updates: Dict[str, Any], admin: dict = Depends(
 async def get_system_stats(admin: dict = Depends(verify_admin_access)):
     service = get_service()
     
-    tasks = list(service.get_all_tasks().values())
-    total_tokens = sum(
-        r.get("token_usage", {}).get("total_tokens_used", 0)
-        for task in tasks
-        for r in task.get("results", [])
-    )
+    # 用list_tasks获取所有任务（含内存+数据库+磁盘），token_usage已正确计算
+    all_tasks = service.list_tasks()
+    total_tokens = sum(t.get("token_usage", 0) for t in all_tasks)
+    
+    # 内存中的任务用于详细统计（耗时等）
+    mem_tasks = list(service.get_all_tasks().values())
     
     llm_stats = service.get_llm_stats() if service.has_llm_provider() else {"total_tokens_used": 0, "total_calls": 0}
     
-    completed_tasks = [t for t in tasks if t["status"] == "completed"]
-    running_tasks = [t for t in tasks if t["status"] in ["running", "waiting_review"]]
+    completed_tasks = [t for t in all_tasks if t["status"] == "completed"]
+    running_tasks = [t for t in all_tasks if t["status"] in ["running", "waiting_review"]]
     
-    # 计算平均耗时
+    # 计算平均耗时（仅内存中有end_time的任务）
     total_duration = 0
-    for task in completed_tasks:
+    duration_count = 0
+    for task in mem_tasks:
+        if task.get("status") != "completed":
+            continue
         start = task.get("start_time")
         end = task.get("end_time", start)
         if start and end:
@@ -122,20 +125,21 @@ async def get_system_stats(admin: dict = Depends(verify_admin_access)):
                 s = datetime.fromisoformat(start)
                 e = datetime.fromisoformat(end)
                 total_duration += (e - s).total_seconds()
+                duration_count += 1
             except:
                 pass
     
-    avg_duration = total_duration / len(completed_tasks) if completed_tasks else 0
+    avg_duration = total_duration / duration_count if duration_count > 0 else 0
     
     # 预估成本（按DeepSeek定价 ¥2/1M tokens）
     estimated_cost = (total_tokens / 1_000_000) * 2.0
     
     return {
-        "total_tasks": len(tasks),
+        "total_tasks": len(all_tasks),
         "completed_tasks": len(completed_tasks),
         "running_tasks": len(running_tasks),
-        "pending_reviews": len([t for t in tasks if t["status"] == "waiting_review"]),
-        "success_rate": len(completed_tasks) / len(tasks) * 100 if tasks else 0,
+        "pending_reviews": len([t for t in all_tasks if t["status"] == "waiting_review"]),
+        "success_rate": len(completed_tasks) / len(all_tasks) * 100 if all_tasks else 0,
         "avg_duration_seconds": avg_duration,
         "nodes_count": len(service.list_nodes()),
         "llm_stats": llm_stats,
@@ -147,11 +151,8 @@ async def get_system_stats(admin: dict = Depends(verify_admin_access)):
             "keywords": t.get("keywords", ""),
             "current_step": t.get("current_step", 0),
             "total_steps": t.get("total_steps", 0),
-            "token_usage": sum(
-                r.get("token_usage", {}).get("total_tokens_used", 0)
-                for r in t.get("results", [])
-            )
-        } for t in tasks]
+            "token_usage": t.get("token_usage", 0)
+        } for t in all_tasks]
     }
 
 

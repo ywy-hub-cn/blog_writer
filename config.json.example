@@ -1,6 +1,6 @@
 {
   "_comment": "Blog-Writer 配置文件示例。复制为 blog_writer/config.json 后修改。敏感信息（密码/API Key）建议通过环境变量设置，不要硬编码在此文件中。",
-  "_doc_path": "docs/CONFIGURATION.md",
+  "_doc_path": "docs/使用指南.md",
 
   "security": {
     "_comment": "安全与认证配置",
@@ -11,7 +11,9 @@
     "api_token": "",
     "api_token_env": "BLOG_WRITER_API_TOKEN",
     "token_expire_hours": 24,
-    "rate_limit_per_minute": 60,
+    "rate_limit_per_minute": 120,
+    "rate_limit_burst": 50,
+    "rate_limit_window_seconds": 60,
     "allowed_origins": [
       "http://localhost:8000",
       "http://127.0.0.1:8000"

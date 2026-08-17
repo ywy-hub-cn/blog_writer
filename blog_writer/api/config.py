@@ -58,20 +58,17 @@ async def update_workflow_config(updates: Dict[str, Any]):
 async def get_system_stats():
     service = get_service()
     
-    tasks = list(service.get_all_tasks().values())
-    total_tokens = sum(
-        r.get("token_usage", {}).get("total_tokens_used", 0)
-        for task in tasks
-        for r in task.get("results", [])
-    )
+    # 用list_tasks获取所有任务（含内存+数据库+磁盘），token_usage已正确计算
+    all_tasks = service.list_tasks()
+    total_tokens = sum(t.get("token_usage", 0) for t in all_tasks)
     
     llm_stats = service.get_llm_stats() if service.has_llm_provider() else {"total_tokens_used": 0, "total_calls": 0}
     
     return {
-        "total_tasks": len(tasks),
-        "completed_tasks": len([t for t in tasks if t["status"] == "completed"]),
-        "running_tasks": len([t for t in tasks if t["status"] in ["running", "waiting_review"]]),
-        "pending_reviews": len([t for t in tasks if t["status"] == "waiting_review"]),
+        "total_tasks": len(all_tasks),
+        "completed_tasks": len([t for t in all_tasks if t["status"] == "completed"]),
+        "running_tasks": len([t for t in all_tasks if t["status"] in ["running", "waiting_review"]]),
+        "pending_reviews": len([t for t in all_tasks if t["status"] == "waiting_review"]),
         "nodes_count": len(service.list_nodes()),
         "llm_stats": llm_stats,
         "total_tokens_consumed": total_tokens,
@@ -81,9 +78,6 @@ async def get_system_stats():
             "keywords": t.get("keywords", ""),
             "current_step": t.get("current_step", 0),
             "total_steps": t.get("total_steps", 0),
-            "token_usage": sum(
-                r.get("token_usage", {}).get("total_tokens_used", 0)
-                for r in t.get("results", [])
-            )
-        } for t in tasks]
+            "token_usage": t.get("token_usage", 0)
+        } for t in all_tasks]
     }

@@ -1,0 +1,70 @@
+{
+  "bid": {
+    "core": {
+      "at": "blog",
+      "th": "SMS API integration",
+      "pi": "educational",
+      "ct": "guide",
+      "pv": "technical",
+      "pr": "developer",
+      "al": "intermediate",
+      "dp": "comprehensive",
+      "tm": "professional",
+      "fm": "longform",
+      "tn": "trusted_expert",
+      "so": "brand_expertise",
+      "ev": "data_case"
+    },
+    "web": {
+      "obj": "lead_generation",
+      "uc": "demo_request",
+      "js": "consideration",
+      "cta": "request_demo",
+      "ci": "solution_education",
+      "pm": "organic",
+      "rk": "top_3"
+    },
+    "seo": {
+      "si": "informational",
+      "qs": "how_to",
+      "kl": "medium_tail",
+      "kc": "commercial_investigational",
+      "sf": "top_funnel",
+      "sc": "b2b_technical",
+      "ic": "educational"
+    },
+    "geo": {
+      "gi": "reference_source",
+      "gs": "authoritative",
+      "gf": "high",
+      "gn": "brand_authority",
+      "gc": "citable"
+    },
+    "cl": {
+      "pi": "00",
+      "sub": "00",
+      "cr": "N/A",
+      "il": "N/A",
+      "lt": "N/A",
+      "pf": "01"
+    },
+    "lo": "01",
+    "st": "how_to_guide"
+  },
+  "summary": {
+    "title": "SMS API Integration: A Complete Guide for Enterprise Developers",
+    "seo_title": "SMS API Integration: 5 Essential Steps for Developers",
+    "slug": "sms-api-integration-guide",
+    "keyword": "SMS API integration",
+    "meta_description": "Learn SMS API integration essentials: 5 proven steps to connect your enterprise apps to a reliable SMS gateway, boost deliverability, and scale messaging.",
+    "excerpt": "A practical, developer-focused guide to SMS API integration covering gateway selection, REST API integration, deliverability optimization, and scaling enterprise messaging with SMS Boosting.",
+    "structure_template_name": "How-To Guide",
+    "tone": "Professional, trusted-expert, friendly, and clear—avoiding salesy language",
+    "depth": "Comprehensive technical coverage from gateway selection to production scaling",
+    "audience": "Technical developers, product managers, operations staff, and enterprise decision-makers"
+  },
+  "validation": {
+    "passed": false,
+    "issues": []
+  }
+}

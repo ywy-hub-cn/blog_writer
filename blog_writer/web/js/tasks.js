@@ -7,14 +7,16 @@ const Tasks = {
     _currentFileName: null,
     _detailPollTimer: null,
 
-    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens) {
+    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens, priority) {
         if (!keywords) {
             UI.showToast('请输入关键词', 'warn');
             return;
         }
 
+        const priorityLabels = {3: '高', 2: '中', 1: '低'};
         UI.addLog(`🚀 启动新任务: ${keywords}`, 'info');
         UI.addLog(`   模式: ${mode}`, 'info');
+        UI.addLog(`   优先级: ${priorityLabels[priority] || '中'}`, 'info');
         if (model) UI.addLog(`   模型: ${model}`, 'info');
         if (temperature !== undefined) UI.addLog(`   温度系数: ${temperature}`, 'info');
         if (maxTokens !== undefined) UI.addLog(`   最大输出 Token: ${maxTokens}`, 'info');
@@ -25,7 +27,8 @@ const Tasks = {
                 brand_path: brandPath,
                 keywords,
                 user_note: userNote,
-                mode
+                mode,
+                priority: priority || 2
             };
             if (model && model !== 'default') payload.model = model;
             if (temperature !== undefined) payload.temperature = temperature;
@@ -75,8 +78,20 @@ const Tasks = {
 
     async refresh() {
         try {
-            const data = await Api.get('/api/tasks');
+            const [data, concurrency] = await Promise.all([
+                Api.get('/api/tasks'),
+                Api.get('/api/tasks/concurrency').catch(() => null)
+            ]);
             const list = document.getElementById('taskList');
+            
+            // 更新并发信息显示
+            if (concurrency) {
+                const concurrencyEl = document.getElementById('concurrencyInfo');
+                if (concurrencyEl) {
+                    concurrencyEl.innerHTML = `🔄 并发 ${concurrency.running}/${concurrency.max_concurrent}` +
+                        (concurrency.queued > 0 ? ` · 🕐 排队 ${concurrency.queued}` : '');
+                }
+            }
             
             if (!data.tasks || data.tasks.length === 0) {
                 list.innerHTML = '<p class="text-gray-500 text-center py-8">暂无任务，请创建新任务</p>';
@@ -98,21 +113,36 @@ const Tasks = {
         }
     },
 
+    _priorityBadge(t) {
+        const priority = (t.extra && t.extra.priority) || 2;
+        if (priority === 3) return '<span class="px-1.5 py-0.5 text-xs rounded bg-red-100 text-red-700">🔴 高</span>';
+        if (priority === 1) return '<span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-700">🟢 低</span>';
+        return '';
+    },
+
     _renderTaskCard(t) {
+        const isQueued = t.status === 'queued';
         const isRunning = t.status === 'running' || t.status === 'pending';
         const isPaused = t.status === 'paused';
         const isWaiting = t.status === 'waiting_review';
         const isFinished = ['completed', 'failed', 'cancelled', 'completed_partial'].includes(t.status);
 
         let actions = '';
+        if (isQueued) {
+            const currentPriority = (t.extra && t.extra.priority) || 2;
+            actions += `<button onclick="event.stopPropagation(); Tasks.boostPriority('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="提升优先级">⬆️ 提升</button>`;
+            actions += `<button onclick="event.stopPropagation(); Tasks.cancelQueue('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="取消排队">❌ 取消排队</button>`;
+        }
         if (isRunning || isWaiting) {
-            actions += `<button onclick="event.stopPropagation(); Tasks.cancel('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="停止任务">⏹️ 停止</button>`;
+            actions += `<button onclick="event.stopPropagation(); Tasks.pause('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="暂停任务（可继续）">⏸️ 暂停</button>`;
+            actions += `<button onclick="event.stopPropagation(); Tasks.cancel('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="取消任务（不可恢复）">⏹️ 取消</button>`;
         }
         if (isPaused) {
             actions += `<button onclick="event.stopPropagation(); Tasks.resume('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="继续任务">▶️ 继续</button>`;
+            actions += `<button onclick="event.stopPropagation(); Tasks.cancel('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="取消任务">⏹️ 取消</button>`;
         }
         if (isFinished) {
-            actions += `<button onclick="event.stopPropagation(); Tasks.resume('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="重新运行">🔄 重跑</button>`;
+            actions += `<button onclick="event.stopPropagation(); Tasks.rerun('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="从头重新运行">🔄 重跑</button>`;
         }
         actions += `<button onclick="event.stopPropagation(); Tasks.showDetail('${UI.escapeAttr(t.task_id)}')" class="btn btn-primary btn-xs" title="查看详情">👁️ 详情</button>`;
         actions += `<button onclick="event.stopPropagation(); Tasks.delete('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="删除任务">🗑️ 删除</button>`;
@@ -121,7 +151,10 @@ const Tasks = {
             <div class="border rounded-lg p-4 card-hover cursor-pointer" onclick="Tasks.showDetail('${UI.escapeAttr(t.task_id)}')">
                 <div class="flex justify-between items-start">
                     <div class="flex-1">
-                        <div class="font-medium text-gray-800">${UI.escapeHtml(t.keywords || '未知任务')}</div>
+                        <div class="font-medium text-gray-800 flex items-center gap-2">
+                            ${UI.escapeHtml(t.keywords || '未知任务')}
+                            ${Tasks._priorityBadge(t)}
+                        </div>
                         <div class="text-xs text-gray-500 mt-1">${UI.escapeHtml(t.task_id)}</div>
                     </div>
                     <span class="px-2 py-1 text-xs rounded ${UI.getStatusColor(t.status)}">
@@ -204,6 +237,17 @@ const Tasks = {
                 document.getElementById('taskDetailTokens').textContent = `🔤 ${UI.formatTokens(task.token_usage)} tokens`;
             }
             
+            // 运行时长
+            const durationEl = document.getElementById('taskDetailDuration');
+            if (task.start_time) {
+                const start = new Date(task.start_time);
+                const end = task.end_time ? new Date(task.end_time) : new Date();
+                const seconds = (end - start) / 1000;
+                if (seconds > 0) {
+                    durationEl.textContent = `⏱️ ${UI.formatDuration(seconds)}`;
+                }
+            }
+            
             // 操作按钮
             this._renderDetailActions(task);
             
@@ -230,14 +274,17 @@ const Tasks = {
         const tid = UI.escapeAttr(task.task_id);
         let buttons = '';
         
-        if (['running', 'waiting_review', 'pending'].includes(task.status)) {
-            buttons += `<button onclick="Tasks.cancel('${tid}')" class="btn btn-outline btn-sm">⏹️ 停止</button>`;
+        if (['running', 'pending', 'waiting_review'].includes(task.status)) {
+            buttons += `<button onclick="Tasks.pause('${tid}')" class="btn btn-outline btn-sm">⏸️ 暂停</button>`;
+            buttons += `<button onclick="Tasks.cancel('${tid}')" class="btn btn-outline btn-sm text-red-500">⏹️ 取消</button>`;
         }
         if (task.status === 'paused') {
             buttons += `<button onclick="Tasks.resume('${tid}')" class="btn btn-outline btn-sm">▶️ 继续</button>`;
+            buttons += `<button onclick="Tasks.cancel('${tid}')" class="btn btn-outline btn-sm text-red-500">⏹️ 取消</button>`;
         }
         if (['completed', 'failed', 'cancelled', 'completed_partial'].includes(task.status)) {
-            buttons += `<button onclick="Tasks.resume('${tid}')" class="btn btn-outline btn-sm">🔄 重跑</button>`;
+            buttons += `<button onclick="Tasks.rerun('${tid}')" class="btn btn-outline btn-sm">🔄 重跑</button>`;
+            buttons += `<button onclick="Tasks.showRerunOptions('${tid}')" class="btn btn-outline btn-sm">📋 选节点重跑</button>`;
         }
         buttons += `<button onclick="Tasks.delete('${tid}')" class="btn btn-outline btn-sm text-red-500">🗑️ 删除</button>`;
         
@@ -300,7 +347,7 @@ const Tasks = {
                             <div class="font-medium text-sm">步骤 ${i + 1}: ${UI.escapeHtml(r.node_id || '未知')}</div>
                             <div class="text-xs text-gray-500 mt-1">
                                 状态: <span class="${statusColor}">${UI.escapeHtml(r.status || '未知')}</span>
-                                ${r.token_usage?.total_tokens ? ` · Token: ${UI.formatTokens(r.token_usage.total_tokens)}` : ''}
+                                ${r.token_usage?.total_tokens_used ? ` · Token: ${UI.formatTokens(r.token_usage.total_tokens_used)}` : ''}
                                 ${r.iterations ? ` · 迭代: ${r.iterations}` : ''}
                             </div>
                         </div>
@@ -395,14 +442,25 @@ const Tasks = {
     },
 
     async cancel(taskId) {
-        if (!confirm('确定要停止这个任务吗？')) return;
+        if (!confirm('确定要取消这个任务吗？取消后无法继续，只能重新运行。')) return;
         try {
             await Api.post(`/api/tasks/${taskId}/cancel`);
-            UI.showToast('✅ 任务已停止', 'success');
+            UI.showToast('✅ 任务已取消', 'success');
             this.refresh();
             if (this._currentTaskId === taskId) this._loadDetail(taskId);
         } catch (e) {
-            UI.showToast('❌ 停止失败: ' + e.message, 'error');
+            UI.showToast('❌ 取消失败: ' + e.message, 'error');
+        }
+    },
+
+    async pause(taskId) {
+        try {
+            await Api.post(`/api/tasks/${taskId}/pause`);
+            UI.showToast('✅ 任务已暂停，可点击继续恢复', 'success');
+            this.refresh();
+            if (this._currentTaskId === taskId) this._loadDetail(taskId);
+        } catch (e) {
+            UI.showToast('❌ 暂停失败: ' + e.message, 'error');
         }
     },
 
@@ -417,6 +475,43 @@ const Tasks = {
         }
     },
 
+    async rerun(taskId, nodeFile) {
+        const startNode = nodeFile || 'S000-startup.json';
+        if (!confirm(`确定要从 ${startNode} 开始重跑吗？之前的结果会被清除。`)) return;
+        try {
+            await Api.post(`/api/tasks/${taskId}/rerun-from`, { nodeFile: startNode });
+            UI.showToast('✅ 任务已开始重跑', 'success');
+            this.refresh();
+            if (this._currentTaskId === taskId) this._loadDetail(taskId);
+        } catch (e) {
+            UI.showToast('❌ 重跑失败: ' + e.message, 'error');
+        }
+    },
+
+    showRerunOptions(taskId) {
+        const nodes = [
+            { file: 'S000-startup.json', name: '启动初始化' },
+            { file: 'S001-bid-infer.json', name: 'BID自动推断' },
+            { file: 'S002-content-prd.json', name: '内容PRD' },
+            { file: 'S003-structure.json', name: '结构生成' },
+            { file: 'S004-draft.json', name: '正文写作' },
+            { file: 'S005-field.json', name: '字段化' },
+            { file: 'S006-preview.json', name: '呈现文档' },
+            { file: 'S007-visual.json', name: '视觉素材' },
+            { file: 'S008-review-draft.json', name: '自审打分' },
+            { file: 'S009-gate.json', name: 'Gate校验' },
+            { file: 'S010-publish.json', name: '发布包' },
+            { file: 'S011-publish-wp.json', name: 'WordPress发布' },
+        ];
+        const options = nodes.map(n => `<option value="${n.file}">${n.file} - ${n.name}</option>`).join('');
+        const selected = prompt(`选择从哪个节点开始重跑：\n\n${nodes.map((n,i) => `${i+1}. ${n.file} - ${n.name}`).join('\n')}\n\n请输入节点文件名（如 S004-draft.json）：`, 'S000-startup.json');
+        if (selected && selected.endsWith('.json')) {
+            this.rerun(taskId, selected);
+        } else if (selected) {
+            UI.showToast('❌ 节点文件名必须以 .json 结尾', 'error');
+        }
+    },
+
     async delete(taskId) {
         if (!confirm('确定要删除这个任务吗？此操作不可恢复！')) return;
         try {
@@ -426,6 +521,27 @@ const Tasks = {
             this.refresh();
         } catch (e) {
             UI.showToast('❌ 删除失败: ' + e.message, 'error');
+        }
+    },
+
+    async cancelQueue(taskId) {
+        if (!confirm('确定要取消这个排队中的任务吗？')) return;
+        try {
+            await Api.post(`/api/tasks/${taskId}/cancel-queue`);
+            UI.showToast('✅ 排队任务已取消', 'success');
+            this.refresh();
+        } catch (e) {
+            UI.showToast('❌ 取消失败: ' + e.message, 'error');
+        }
+    },
+
+    async boostPriority(taskId) {
+        try {
+            await Api.put(`/api/tasks/${taskId}/priority`, { priority: 3 });
+            UI.showToast('✅ 优先级已提升为高', 'success');
+            this.refresh();
+        } catch (e) {
+            UI.showToast('❌ 提升失败: ' + e.message, 'error');
         }
     },
 };
