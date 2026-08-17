@@ -1,0 +1,27 @@
+[Unit]
+Description=Blog-Writer 企业级内容自动化系统
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/blog-writer
+Environment="PATH=/opt/blog-writer/.venv/bin"
+EnvironmentFile=/opt/blog-writer/.env
+ExecStart=/opt/blog-writer/.venv/bin/python -m uvicorn blog_writer.main:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blog-writer
+
+# 安全限制
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/blog-writer/instance /opt/blog-writer/brands
+
+[Install]
+WantedBy=multi-user.target
