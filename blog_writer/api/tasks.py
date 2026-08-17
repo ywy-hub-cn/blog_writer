@@ -214,6 +214,7 @@ class RerunFromRequest(BaseModel):
     brand_path: str = Field(default="", alias="brandPath")
     keywords: str = ""
     mode: str = "auto"
+    user_note: str = Field(default="", alias="userNote")
 
     @field_validator("node_file")
     @classmethod
@@ -571,6 +572,7 @@ async def rerun_from_node(
     if not keywords:
         raise HTTPException(status_code=400, detail="keywords 不能为空")
     mode = task.get("mode") or "auto"
+    user_note = req.user_note or task.get("user_note", "")
     _track_task(
         _safe_start_task(
             service.rerun_from_node(
@@ -579,6 +581,7 @@ async def rerun_from_node(
                 brand_path=brand_path,
                 keywords=keywords,
                 mode=mode,
+                user_note=user_note,
             ),
             task_id=task_id,
         )

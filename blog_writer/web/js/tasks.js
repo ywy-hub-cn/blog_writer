@@ -475,11 +475,13 @@ const Tasks = {
         }
     },
 
-    async rerun(taskId, nodeFile) {
+    async rerun(taskId, nodeFile, userNote) {
         const startNode = nodeFile || 'S000-startup.json';
         if (!confirm(`确定要从 ${startNode} 开始重跑吗？之前的结果会被清除。`)) return;
         try {
-            await Api.post(`/api/tasks/${taskId}/rerun-from`, { nodeFile: startNode });
+            const body = { nodeFile: startNode };
+            if (userNote) body.userNote = userNote;
+            await Api.post(`/api/tasks/${taskId}/rerun-from`, body);
             UI.showToast('✅ 任务已开始重跑', 'success');
             this.refresh();
             if (this._currentTaskId === taskId) this._loadDetail(taskId);
@@ -488,7 +490,10 @@ const Tasks = {
         }
     },
 
+    _rerunTaskId: null,
+
     showRerunOptions(taskId) {
+        this._rerunTaskId = taskId;
         const nodes = [
             { file: 'S000-startup.json', name: '启动初始化' },
             { file: 'S001-bid-infer.json', name: 'BID自动推断' },
@@ -503,13 +508,29 @@ const Tasks = {
             { file: 'S010-publish.json', name: '发布包' },
             { file: 'S011-publish-wp.json', name: 'WordPress发布' },
         ];
-        const options = nodes.map(n => `<option value="${n.file}">${n.file} - ${n.name}</option>`).join('');
-        const selected = prompt(`选择从哪个节点开始重跑：\n\n${nodes.map((n,i) => `${i+1}. ${n.file} - ${n.name}`).join('\n')}\n\n请输入节点文件名（如 S004-draft.json）：`, 'S000-startup.json');
-        if (selected && selected.endsWith('.json')) {
-            this.rerun(taskId, selected);
-        } else if (selected) {
-            UI.showToast('❌ 节点文件名必须以 .json 结尾', 'error');
-        }
+        const select = document.getElementById('rerunNodeSelect');
+        select.innerHTML = nodes.map(n => `<option value="${n.file}">${n.file} - ${n.name}</option>`).join('');
+        select.value = 'S000-startup.json';
+        document.getElementById('rerunUserNote').value = '';
+        const modal = document.getElementById('rerunModal');
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    },
+
+    closeRerunModal() {
+        const modal = document.getElementById('rerunModal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        this._rerunTaskId = null;
+    },
+
+    confirmRerun() {
+        const taskId = this._rerunTaskId;
+        const nodeFile = document.getElementById('rerunNodeSelect').value;
+        const userNote = document.getElementById('rerunUserNote').value.trim();
+        if (!taskId || !nodeFile) return;
+        this.closeRerunModal();
+        this.rerun(taskId, nodeFile, userNote);
     },
 
     async delete(taskId) {

@@ -2010,6 +2010,7 @@ class WorkflowService(TaskControlMixin):
         brand_path: str = "",
         keywords: str = "",
         mode: str = "auto",
+        user_note: str = "",
         log_callback: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
         """从指定节点重新运行（忽略之前的结果）"""
@@ -2094,7 +2095,7 @@ class WorkflowService(TaskControlMixin):
         params = {
             "brand_path": brand_path or state.get("brand_path", ""),
             "keywords": keywords or state.get("keywords", ""),
-            "user_note": state.get("user_note", ""),
+            "user_note": user_note or state.get("user_note", ""),
             "brand_site_url": state.get("brand_site_url", ""),
             "forbidden_whitelist": whitelist,
             "forbidden_whitelist_csv": ",".join(whitelist),
