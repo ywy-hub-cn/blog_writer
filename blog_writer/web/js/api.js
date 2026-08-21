@@ -50,7 +50,12 @@ const Api = {
                 throw new Error((json && json.message) || '服务暂不可用');
             }
             if (!response.ok) {
-                const msg = (json && (json.message || json.detail)) || `HTTP ${response.status}`;
+                let msg = (json && (json.message || json.detail)) || `HTTP ${response.status}`;
+                // 422参数验证失败时，把具体字段错误也显示出来
+                if (response.status === 422 && json && json.data && json.data.details) {
+                    const details = Array.isArray(json.data.details) ? json.data.details.join('; ') : json.data.details;
+                    msg = `${msg}: ${details}`;
+                }
                 throw new Error(typeof msg === 'string' ? msg : `HTTP ${response.status}`);
             }
 
@@ -175,3 +180,5 @@ const IframeBridge = {
         this.notify('REVIEW_REQUESTED', { task_id: taskId, node_name: nodeName });
     }
 };
+
+// fix-end
