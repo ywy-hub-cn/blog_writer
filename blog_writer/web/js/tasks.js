@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 任务管理
  */
 
@@ -45,6 +45,7 @@ const Tasks = {
             return result;
         } catch (e) {
             UI.addLog(`   ❌ 启动失败: ${e.message}`, 'error');
+            UI.showToast(`❌ ${e.message}`, 'error', 5000);
             throw e;
         }
     },
@@ -673,3 +674,4 @@ const Stats = {
         }
     }
 };
+

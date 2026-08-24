@@ -443,10 +443,24 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         field = " -> ".join(str(loc) for loc in err.get("loc", []) if loc != "body")
         msg = err.get("msg", "未知错误")
         errors.append(f"{field}: {msg}")
-    
+
+    # 记录请求体和验证错误，便于排查 422 根因
+    try:
+        body = await request.body()
+        body_text = body.decode("utf-8", errors="replace")[:2000]
+    except Exception:
+        body_text = "<unreadable>"
+    logger.warning(
+        "422 validation error: %s %s | body=%s | errors=%s",
+        request.method, request.url.path, body_text, errors
+    )
+
+    # 用第一条错误作为 message，让前端直接显示具体原因
+    first_msg = errors[0] if errors else "参数验证失败"
+
     return JSONResponse(
         status_code=422,
-        content=error(ErrorCode.PARAM_ERROR, "参数验证失败", {"details": errors})
+        content=error(ErrorCode.PARAM_ERROR, first_msg, {"details": errors})
     )
 
 
