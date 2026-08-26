@@ -8,7 +8,7 @@ from typing import Optional, Any, List, Union
 
 from fastapi import APIRouter, HTTPException, Request, Depends, Header
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, field_validator, ConfigDict, Field
+from pydantic import BaseModel, field_validator, model_validator, ConfigDict, Field
 
 from blog_writer.service_manager import get_service
 from blog_writer.api.webhooks import get_webhook_manager
@@ -51,15 +51,26 @@ async def get_optional_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> dict:
-    """任务接口鉴权：登录了返回真实用户，未登录返回默认运营用户（免登录使用）。
+    """任务接口鉴权。
 
-    运营场景下不需要登录即可启动/查看/管理任务；管理员接口（nodes/config）
-    仍使用 get_current_user 保持登录要求。
+    BLOG_WRITER_TASK_AUTH=required|optional（默认：production 必填，development 可选）
+    管理员接口（nodes/config）仍始终使用 get_current_user。
     """
+    import os
+
+    def _task_auth_required() -> bool:
+        explicit = os.environ.get("BLOG_WRITER_TASK_AUTH", "").strip().lower()
+        if explicit in ("required", "true", "1", "yes"):
+            return True
+        if explicit in ("optional", "false", "0", "no"):
+            return False
+        return os.environ.get("BLOG_WRITER_MODE", "development") == "production"
+
     try:
         return await get_current_user(request, credentials, x_api_key)
     except HTTPException:
-        # 未登录或 token 无效：返回默认运营用户（admin 角色，可访问所有任务）
+        if _task_auth_required():
+            raise
         return {
             "is_admin": True,
             "user_id": "operator",
@@ -67,6 +78,15 @@ async def get_optional_user(
             "auth_type": "anonymous",
             "token_created_at": None,
         }
+
+
+def _enrich_task_dict(task: dict, full: bool = True) -> dict:
+    if not task:
+        return task
+    from blog_writer.api.task_enrichment import enrich_task
+
+    service = get_service()
+    return enrich_task(task, service.instance_root, full=full)
 
 
 def _track_task(coro, name: str = ""):
@@ -80,20 +100,83 @@ def _track_task(coro, name: str = ""):
 def _validate_brand_path_value(v: str) -> str:
     if not v or len(v) > 255:
         raise ValueError("品牌路径不能为空且长度不能超过255")
-    if v.startswith("/") or v.startswith("\\") or v.startswith(".."):
+    # 容错：统一路径分隔符，去除多余斜杠
+    v = v.replace("\\", "/")
+    while "//" in v:
+        v = v.replace("//", "/")
+    v = v.rstrip("/")
+    if v.startswith("/") or v.startswith(".."):
         raise ValueError("路径不安全")
     # 检查路径遍历：任何段为 ".." 则拒绝
-    if any(seg == ".." for seg in v.replace("\\", "/").split("/")):
+    if any(seg == ".." for seg in v.split("/")):
         raise ValueError("路径不安全，不允许目录遍历")
-    if v.startswith("~") or "~/" in v or "~\\" in v:
+    if v.startswith("~") or "~/" in v:
         raise ValueError("路径不安全")
     # 禁止绝对路径盘符
     if len(v) >= 2 and v[1] == ":":
         raise ValueError("路径不安全")
     # 只允许安全字符
-    if not re.match(r'^[a-zA-Z0-9_\-./\\]+$', v):
+    if not re.match(r'^[a-zA-Z0-9_\-./]+$', v):
         raise ValueError("路径包含非法字符")
     return v
+
+
+def _lookup_brand_path(value: str) -> Optional[str]:
+    """按 display_name 或 brand_id 从品牌库解析 inner_path（忽略大小写）。"""
+    from blog_writer.db import BrandRepository
+
+    needle = value.strip()
+    if not needle:
+        return None
+    needle_lower = needle.lower()
+    repo = BrandRepository()
+    # 先精确匹配
+    for b in repo.list_brands():
+        if b.get("display_name") == needle or b.get("brand_id") == needle:
+            return b.get("inner_path") or f"./brands/{b['brand_id']}"
+    # 再忽略大小写匹配
+    for b in repo.list_brands():
+        if (b.get("display_name") or "").lower() == needle_lower or \
+           (b.get("brand_id") or "").lower() == needle_lower:
+            return b.get("inner_path") or f"./brands/{b['brand_id']}"
+    return None
+
+
+def _normalize_brand_path_input(value: str) -> str:
+    """兼容 Java/运营侧多种品牌字段写法，统一为可校验的相对路径。"""
+    raw = str(value).strip()
+    if not raw:
+        raise ValueError("品牌路径不能为空，请选择或上传品牌后再启动任务")
+
+    # 中文显示名、含空格等：按品牌库解析
+    if re.search(r"[^\w\-./\\]", raw) or " " in raw:
+        resolved = _lookup_brand_path(raw)
+        if not resolved:
+            # 给出可用品牌列表，便于排查
+            from blog_writer.db import BrandRepository
+            repo = BrandRepository()
+            available = [b.get("display_name") for b in repo.list_brands() if b.get("display_name")]
+            hint = f"可用品牌：{', '.join(available)}" if available else "当前暂无品牌，请先上传"
+            raise ValueError(
+                f"未找到品牌「{raw}」，{hint}；也可传 brandPath=brands/<brand_id>"
+            )
+        raw = resolved
+
+    # 仅 brand_id（无路径分隔符）→ brands/<id>
+    if "/" not in raw and "\\" not in raw:
+        raw = f"brands/{raw}"
+
+    # 先标准化路径分隔符，便于判断前缀
+    raw = raw.replace("\\", "/")
+    while "//" in raw:
+        raw = raw.replace("//", "/")
+    raw = raw.rstrip("/")
+
+    # 容错：自动添加 ./ 前缀（相对路径）
+    if not raw.startswith("./") and not raw.startswith("../"):
+        raw = "./" + raw
+
+    return _validate_brand_path_value(raw)
 
 
 class StartTaskRequest(BaseModel):
@@ -117,19 +200,73 @@ class StartTaskRequest(BaseModel):
     priority: int = Field(default=2, alias="priority", ge=1, le=3)
     callback_url: Optional[str] = Field(default=None, alias="callbackUrl")
     callback_secret: Optional[str] = Field(default=None, alias="callbackSecret")
+    callback_events: Optional[List[str]] = Field(default=None, alias="callbackEvents")
 
-    @field_validator("brand_path")
+    @model_validator(mode="before")
     @classmethod
-    def validate_brand_path(cls, v: str) -> str:
-        return _validate_brand_path_value(v)
+    def merge_integration_aliases(cls, data: Any) -> Any:
+        """兼容 Java 对接常见字段名：brandId / keyword / displayName 等。"""
+        if not isinstance(data, dict):
+            return data
+        merged = dict(data)
+
+        if merged.get("keywords") is None and merged.get("keyword") is not None:
+            merged["keywords"] = merged["keyword"]
+
+        if not merged.get("brandPath") and not merged.get("brand_path"):
+            for key in (
+                "brandId", "brand_id",
+                "displayName", "display_name", "brandName", "brand_name",
+            ):
+                if merged.get(key):
+                    merged["brandPath"] = merged[key]
+                    break
+
+        return merged
+
+    @field_validator("brand_path", mode="before")
+    @classmethod
+    def normalize_brand_path(cls, v: Any) -> str:
+        if v is None:
+            return v
+        return _normalize_brand_path_input(str(v))
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def normalize_keywords(cls, v: Any) -> str:
+        if v is None:
+            return v
+        if isinstance(v, list):
+            v = ", ".join(str(x).strip() for x in v if str(x).strip())
+        raw = str(v)
+        # 容错：统一多种分隔符为逗号+空格
+        raw = re.sub(r'[;；\n\r\t]+', ', ', raw)
+        # 容错：多个空格合并为一个
+        raw = re.sub(r' {2,}', ' ', raw)
+        # 容错：去除重复的逗号分隔关键词
+        parts = [p.strip() for p in raw.split(',') if p.strip()]
+        seen = set()
+        unique = []
+        for p in parts:
+            if p.lower() not in seen:
+                seen.add(p.lower())
+                unique.append(p)
+        return ", ".join(unique) if unique else raw.strip()
 
     @field_validator("keywords")
     @classmethod
     def validate_keywords(cls, v: str) -> str:
-        if not v or len(v) > 500:
-            raise ValueError("关键词不能为空且长度不能超过500")
+        if not v:
+            raise ValueError("关键词不能为空，请输入至少一个关键词")
+        # 清洗危险字符
         v = re.sub(r'[<>\'"\x00-\x1f]', '', v)
-        return v.strip()
+        v = v.strip()
+        if not v:
+            raise ValueError("关键词不能为空，请输入至少一个关键词")
+        # 容错：长度超限时自动截断（而不是直接报错）
+        if len(v) > 500:
+            v = v[:500].rsplit(',', 1)[0].strip() if ',' in v[:500] else v[:500]
+        return v
 
     @field_validator("mode")
     @classmethod
@@ -151,9 +288,18 @@ class StartTaskRequest(BaseModel):
     @field_validator("user_note")
     @classmethod
     def validate_user_note(cls, v: str) -> str:
-        if len(v) > 2000:
-            raise ValueError("附加说明长度不能超过2000")
-        return v
+        # 附加要求不设硬性字数上限；仅清洗控制字符，避免截断运营长指令
+        return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", v or "")
+
+    @field_validator("brand_site_url")
+    @classmethod
+    def validate_brand_site_url(cls, v: str) -> str:
+        raw = (v or "").strip()
+        if not raw:
+            return ""
+        if not re.match(r"^https?://.+", raw, re.I):
+            raise ValueError("品牌官网地址需以 http:// 或 https:// 开头")
+        return raw.rstrip("/")
 
     @field_validator("forbidden_whitelist", mode="before")
     @classmethod
@@ -215,6 +361,7 @@ class RerunFromRequest(BaseModel):
     keywords: str = ""
     mode: str = "auto"
     user_note: str = Field(default="", alias="userNote")
+    brand_site_url: str = Field(default="", alias="brandSiteUrl")
 
     @field_validator("node_file")
     @classmethod
@@ -231,6 +378,64 @@ class RerunFromRequest(BaseModel):
         if not v:
             return v
         return _validate_brand_path_value(v)
+
+    @field_validator("brand_site_url")
+    @classmethod
+    def validate_brand_site_url(cls, v: str) -> str:
+        raw = (v or "").strip()
+        if not raw:
+            return ""
+        if not re.match(r"^https?://.+", raw, re.I):
+            raise ValueError("品牌官网地址需以 http:// 或 https:// 开头")
+        return raw.rstrip("/")
+
+    @field_validator("user_note")
+    @classmethod
+    def validate_user_note(cls, v: str) -> str:
+        return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", v or "")
+
+
+class BatchTaskItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    keywords: str
+    user_note: str = Field(default="", alias="userNote")
+    brand_site_url: str = Field(default="", alias="brandSiteUrl")
+
+
+class BatchStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    brand_path: str = Field(alias="brandPath")
+    mode: str = "auto"
+    priority: int = Field(default=2, alias="priority", ge=1, le=3)
+    user_note: str = Field(default="", alias="userNote")
+    brand_site_url: str = Field(default="", alias="brandSiteUrl")
+    forbidden_whitelist: Union[List[str], str, None] = Field(
+        default=None, alias="forbiddenWhitelist"
+    )
+    tasks: List[BatchTaskItem]
+    callback_url: Optional[str] = Field(default=None, alias="callbackUrl")
+    callback_secret: Optional[str] = Field(default=None, alias="callbackSecret")
+    callback_events: Optional[List[str]] = Field(default=None, alias="callbackEvents")
+    batch_id: Optional[str] = Field(default=None, alias="batchId")
+
+    @field_validator("brand_path", mode="before")
+    @classmethod
+    def normalize_brand_path(cls, v: Any) -> str:
+        if v is None:
+            return v
+        return _normalize_brand_path_input(str(v))
+
+    @field_validator("brand_path")
+    @classmethod
+    def validate_brand_path(cls, v: str) -> str:
+        return _validate_brand_path_value(v)
+
+    @field_validator("forbidden_whitelist", mode="before")
+    @classmethod
+    def validate_forbidden_whitelist(cls, v):
+        return normalize_forbidden_whitelist(v)
 
 
 class RetryNodeRequest(BaseModel):
@@ -314,14 +519,39 @@ def _mark_task_failed(task_id: str, error_msg: str) -> None:
 async def start_task(
     request: Request,
     req: StartTaskRequest,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     _user: dict = Depends(get_optional_user),
 ):
     service = get_service()
     webhook_mgr = get_webhook_manager()
 
-    task_id = req.task_id or (
-        f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    )
+    from blog_writer.api.case_convert import normalize_idempotency_key
+    from blog_writer.security.path_security import validate_task_id
+
+    existing_idempotent = None
+    if req.task_id:
+        task_id = req.task_id
+    elif idempotency_key:
+        candidate = normalize_idempotency_key(idempotency_key)
+        if candidate and validate_task_id(candidate):
+            existing_idempotent = service.get_task_status(candidate)
+            task_id = candidate
+        else:
+            task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    else:
+        task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+    if existing_idempotent:
+        return _enrich_task_dict(
+            {
+                "task_id": task_id,
+                "status": existing_idempotent.get("status", "unknown"),
+                "message": "任务已存在（幂等键命中）",
+                "idempotent_hit": True,
+            },
+            full=True,
+        )
+
     owner_id = get_user_id(_user)
 
     step_files = req.step_files
@@ -380,7 +610,12 @@ async def start_task(
 
     if req.callback_url:
         try:
-            webhook_mgr.register(task_id, req.callback_url, req.callback_secret or "")
+            webhook_mgr.register(
+                task_id,
+                req.callback_url,
+                req.callback_secret or "",
+                events=req.callback_events,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         _track_task(
@@ -410,8 +645,97 @@ async def start_task(
         "owner_id": owner_id,
     }
     if req.callback_url:
-        result["webhook"] = {"url": req.callback_url, "registered": True}
-    return result
+        result["webhook"] = {
+            "url": req.callback_url,
+            "registered": True,
+            "events": req.callback_events,
+        }
+    if idempotency_key:
+        result["idempotency_key"] = idempotency_key
+    return _enrich_task_dict(result, full=False)
+
+
+@router.post("/batch")
+async def batch_start_tasks(
+    req: BatchStartRequest,
+    _user: dict = Depends(get_optional_user),
+):
+    """批量启动写作任务（Java 编排常用）。"""
+    if not req.tasks:
+        raise HTTPException(status_code=400, detail="tasks 不能为空")
+
+    service = get_service()
+    webhook_mgr = get_webhook_manager()
+    owner_id = get_user_id(_user)
+    batch_id = req.batch_id or (
+        f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    )
+
+    started: List[dict] = []
+    for index, item in enumerate(req.tasks, start=1):
+        task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        keywords = (item.keywords or "").strip()
+        if not keywords:
+            raise HTTPException(status_code=400, detail=f"tasks[{index - 1}] 缺少 keywords")
+
+        user_note = item.user_note or req.user_note
+        brand_site_url = item.brand_site_url or req.brand_site_url
+        brand_path = _resolve_brand_path(req.brand_path)
+
+        try:
+            service.pre_register_task(
+                task_id=task_id,
+                brand_path=req.brand_path,
+                keywords=keywords,
+                user_note=user_note,
+                mode=req.mode,
+                brand_site_url=brand_site_url,
+                forbidden_whitelist=req.forbidden_whitelist or [],
+                owner_id=owner_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        task = service.get_task_status(task_id) or {}
+        extra = dict(task.get("extra") or {})
+        extra["batch_id"] = batch_id
+        task["extra"] = extra
+        service._tasks[task_id] = task
+        service._save_state(task_id)
+
+        if req.callback_url:
+            try:
+                webhook_mgr.register(
+                    task_id,
+                    req.callback_url,
+                    req.callback_secret or "",
+                    events=req.callback_events,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+        kwargs = {
+            "brand_path": brand_path,
+            "keywords": keywords,
+            "user_note": user_note,
+            "mode": req.mode,
+            "brand_site_url": brand_site_url,
+            "forbidden_whitelist": req.forbidden_whitelist or [],
+            "task_id": task_id,
+            "priority": req.priority,
+        }
+        _track_task(
+            _safe_start_task(service.start_workflow(**kwargs), task_id=task_id),
+            name=f"workflow:batch:{batch_id}:{task_id}",
+        )
+        started.append({"task_id": task_id, "keywords": keywords, "status": "started"})
+
+    return {
+        "batch_id": batch_id,
+        "task_count": len(started),
+        "tasks": started,
+        "message": "批量任务已启动",
+    }
 
 
 @router.get("/concurrency")
@@ -469,7 +793,9 @@ async def set_max_concurrent(req: ConcurrencyRequest, admin: dict = Depends(veri
 @router.get("")
 async def list_tasks(_user: dict = Depends(get_optional_user)):
     service = get_service()
-    return {"tasks": filter_tasks_for_user(_user, service.list_tasks())}
+    tasks = filter_tasks_for_user(_user, service.list_tasks())
+    enriched = [_enrich_task_dict(t, full=False) for t in tasks]
+    return {"tasks": enriched}
 
 
 @router.get("/{task_id}")
@@ -477,7 +803,7 @@ async def get_task(task_id: str, _user: dict = Depends(get_optional_user)):
     service = get_service()
     task = service.get_task_status(task_id)
     assert_task_access(_user, task)
-    return task
+    return _enrich_task_dict(task, full=True)
 
 
 @router.get("/{task_id}/logs")
@@ -573,6 +899,7 @@ async def rerun_from_node(
         raise HTTPException(status_code=400, detail="keywords 不能为空")
     mode = task.get("mode") or "auto"
     user_note = req.user_note or task.get("user_note", "")
+    brand_site_url = req.brand_site_url or task.get("brand_site_url", "")
     _track_task(
         _safe_start_task(
             service.rerun_from_node(
@@ -582,6 +909,7 @@ async def rerun_from_node(
                 keywords=keywords,
                 mode=mode,
                 user_note=user_note,
+                brand_site_url=brand_site_url,
             ),
             task_id=task_id,
         )
