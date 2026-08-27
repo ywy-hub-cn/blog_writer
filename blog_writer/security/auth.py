@@ -2,7 +2,7 @@
 
 密码采用 PBKDF2-SHA256 哈希存储（带随机盐），支持双角色（运营 operator / 管理员 admin）。
 密码来源：环境变量优先，配置文件次之。
-Token：默认内存；若配置 REDIS_URL / BLOG_WRITER_STATE_BACKEND=redis 则外置。
+Token：默认 memory；仅当 BLOG_WRITER_STATE_BACKEND=redis 时外置 Redis（不受 REDIS_URL 单独影响）。
 """
 import hashlib
 import hmac
@@ -197,7 +197,7 @@ def _persist_token(token: str, data: dict, ttl_seconds: int) -> None:
     store = get_state_store()
     backend = os.environ.get("BLOG_WRITER_STATE_BACKEND", "").strip().lower()
     if not backend:
-        backend = "redis" if os.environ.get("REDIS_URL", "").strip() else "memory"
+        backend = "memory"
     require_external = backend == "redis"
     try:
         store.set_json(_token_store_key(token), data, ttl_seconds=ttl_seconds)
