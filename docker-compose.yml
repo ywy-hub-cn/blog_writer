@@ -49,14 +49,17 @@ services:
       # 日志配置
       - LOG_FORMAT=${LOG_FORMAT:-text}
       - WEBHOOK_URL=${WEBHOOK_URL:-}
-      # Redis 状态外置（Token / Webhook）
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - BLOG_WRITER_STATE_BACKEND=${BLOG_WRITER_STATE_BACKEND:-redis}
+      # 状态存储：默认 memory（单机够用，无需 Redis）；生产要持久化 Token 再设 redis
+      - BLOG_WRITER_STATE_BACKEND=${BLOG_WRITER_STATE_BACKEND:-memory}
+      - REVIEW_EVENT_BACKEND=${REVIEW_EVENT_BACKEND:-memory}
+      - REDIS_URL=${REDIS_URL:-}
+      # Java 对接：camelCase 响应 + 任务鉴权策略
+      - RESPONSE_CASE=${RESPONSE_CASE:-camel}
+      - BLOG_WRITER_TASK_AUTH=${BLOG_WRITER_TASK_AUTH:-optional}
+      - BLOG_WRITER_HEALTH_ENVELOPE=${BLOG_WRITER_HEALTH_ENVELOPE:-true}
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     networks:
       - blog-network
     healthcheck:

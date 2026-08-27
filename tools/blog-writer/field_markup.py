@@ -49,18 +49,26 @@ def parse_semantic_types(structure_md: str) -> Dict[str, str]:
 
 
 def _inline_md(text: str) -> str:
-    """有限 Markdown 行内转换。"""
+    """有限 Markdown 行内转换。先保护链接，避免 URL 中的下划线被当成斜体。"""
+    links: list[tuple[str, str]] = []
+
+    def _park_link(match: re.Match) -> str:
+        links.append((match.group(1), match.group(2)))
+        return f"\x00LINK{len(links) - 1}\x00"
+
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _park_link, text)
     text = html.escape(text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"__(.+?)__", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<em>\1</em>", text)
     text = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<em>\1</em>", text)
-    text = re.sub(
-        r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
-        r'<a href="\2" rel="noopener noreferrer">\1</a>',
-        text,
-    )
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    for index, (label, url) in enumerate(links):
+        anchor = (
+            f'<a href="{html.escape(url, quote=True)}" rel="noopener noreferrer">'
+            f"{html.escape(label)}</a>"
+        )
+        text = text.replace(f"\x00LINK{index}\x00", anchor)
     return text
 
 
@@ -181,6 +189,20 @@ def convert_section_body(body: str, start_seq: int = 1) -> Tuple[str, int]:
             i += 1
             continue
 
+        # References 条目（必须先于普通列表，避免 URL 下划线被当成斜体）
+        ref_m = re.match(r"^[-*]\s+\[(.+?)\]\((https?://[^)]+)\)(.*)$", stripped)
+        if ref_m:
+            flush_list()
+            seq += 1
+            label, url, rest = ref_m.group(1), ref_m.group(2), ref_m.group(3)
+            out.append(
+                f'<p data-field="reference" data-seq="{seq:02d}">'
+                f'<a href="{html.escape(url, quote=True)}" rel="noopener noreferrer">'
+                f"{_inline_md(label)}</a>{_inline_md(rest)}</p>"
+            )
+            i += 1
+            continue
+
         # 列表
         m_ul = re.match(r"^[-*+]\s+(.+)$", stripped)
         m_ol = re.match(r"^\d+\.\s+(.+)$", stripped)
@@ -229,20 +251,6 @@ def convert_section_body(body: str, start_seq: int = 1) -> Tuple[str, int]:
                 f'<div class="faq-answer"><p data-field="faq_answer">{ans_html}</p></div>'
                 f"</details>"
             )
-            continue
-
-        # References 条目
-        ref_m = re.match(r"^[-*]\s+\[(.+?)\]\((https?://[^)]+)\)(.*)$", stripped)
-        if ref_m:
-            flush_list()
-            seq += 1
-            label, url, rest = ref_m.group(1), ref_m.group(2), ref_m.group(3)
-            out.append(
-                f'<p data-field="reference" data-seq="{seq:02d}">'
-                f'<a href="{html.escape(url)}" rel="noopener noreferrer">'
-                f"{_inline_md(label)}</a>{_inline_md(rest)}</p>"
-            )
-            i += 1
             continue
 
         # 普通段落（合并续行）

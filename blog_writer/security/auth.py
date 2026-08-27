@@ -196,8 +196,9 @@ def _persist_token(token: str, data: dict, ttl_seconds: int) -> None:
     _active_tokens[token] = data
     store = get_state_store()
     backend = os.environ.get("BLOG_WRITER_STATE_BACKEND", "").strip().lower()
-    redis_url = os.environ.get("REDIS_URL", "").strip()
-    require_external = backend == "redis" or bool(redis_url)
+    if not backend:
+        backend = "redis" if os.environ.get("REDIS_URL", "").strip() else "memory"
+    require_external = backend == "redis"
     try:
         store.set_json(_token_store_key(token), data, ttl_seconds=ttl_seconds)
         if require_external and not isinstance(store.get_json(_token_store_key(token)), dict):

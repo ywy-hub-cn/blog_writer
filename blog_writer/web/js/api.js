@@ -11,7 +11,25 @@ const Api = {
     },
 
     _getToken() {
-        return localStorage.getItem('adminToken') || null;
+        const token = localStorage.getItem('adminToken');
+        const expireAt = parseInt(localStorage.getItem('tokenExpireAt') || '0', 10);
+        if (token && expireAt && Date.now() >= expireAt * 1000) {
+            return null;
+        }
+        return token || null;
+    },
+
+    isAuthError(message) {
+        const msg = String(message || '');
+        return /未提供认证|Token无效|登录已过期|认证失败|401|403/.test(msg);
+    },
+
+    promptLogin(reason) {
+        UI.showToast(reason || '请先登录后再操作', 'warn', 5000);
+        UI.addLog(`⚠️ ${reason || '需要登录'}，正在打开登录窗口...`, 'warn');
+        if (typeof Auth !== 'undefined' && Auth.openLoginModal) {
+            setTimeout(() => Auth.openLoginModal(), 300);
+        }
     },
 
     _buildHeaders(customHeaders = {}, isFormData = false) {
@@ -50,7 +68,11 @@ const Api = {
                 throw new Error((json && json.message) || '服务暂不可用');
             }
             if (!response.ok) {
-                const msg = (json && (json.message || json.detail)) || `HTTP ${response.status}`;
+                let msg = (json && (json.message || json.detail)) || `HTTP ${response.status}`;
+                // 422 验证错误：尝试从 data.details 提取具体字段错误
+                if (response.status === 422 && json && json.data && json.data.details) {
+                    msg = json.data.details.join('; ');
+                }
                 throw new Error(typeof msg === 'string' ? msg : `HTTP ${response.status}`);
             }
 

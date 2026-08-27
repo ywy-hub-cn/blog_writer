@@ -4,6 +4,13 @@ import shutil
 import json
 import re
 import argparse
+from pathlib import Path
+
+_TOOLS_DIR = Path(__file__).resolve().parent
+if str(_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_DIR))
+from brand_site_url import pick_brand_site_url  # noqa: E402
+
 
 def infer_role(filename):
     lower_name = filename.lower()
@@ -159,15 +166,26 @@ def main():
     manifest_path = os.path.join(out_dir, 'brand', 'manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    brand_text_blob = "\n".join(brand_sections.values())
+    site_url = pick_brand_site_url(
+        args.brand_site_url,
+        all_urls,
+        brand_text=brand_text_blob,
+    )
+    site_display = site_url or "未提供"
     
     startup_content = f"""# 启动确认
 
 ## 基本信息
 - **关键词**: {args.keywords}
 - **用户备注**: {args.user_note}
-- **品牌官网**: {args.brand_site_url}
+- **品牌官网**: {site_display}
 - **模式**: free
 - **本次禁用词白名单**: {('、'.join(whitelist) if whitelist else '（无）')}
+
+## 品牌官网
+{site_display}
 
 ## 品牌文件清单
 """
@@ -222,6 +240,7 @@ def main():
     
     print('OK: brand setup complete')
     print(f'   copied files: {len(brand_files)}')
+    print(f'   brand_site_url: {site_display}')
     if whitelist:
         print(f'   whitelist ({len(whitelist)}): {", ".join(whitelist)}')
     print(f'   output: {startup_path}')

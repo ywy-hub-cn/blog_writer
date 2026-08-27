@@ -20,7 +20,7 @@ from blog_writer.api.auth import router as auth_router
 from blog_writer.api.admin.nodes import router as admin_nodes_router
 from blog_writer.api.admin.config import router as admin_config_router
 from blog_writer.api.brands import router as brands_router
-from blog_writer.api.deps import get_current_user, resolve_client_ip
+from blog_writer.api.deps import get_current_user, resolve_client_ip, is_task_auth_required
 from blog_writer.api.response import success, error, ErrorCode
 from blog_writer.api.webhooks import get_webhook_manager
 from blog_writer.service_manager import get_config, get_service
@@ -134,7 +134,7 @@ app.add_middleware(
     allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Admin-Request", "X-Request-ID", "X-API-Key"],
+    allow_headers=["Authorization", "Content-Type", "X-Admin-Request", "X-Request-ID", "X-API-Key", "Idempotency-Key"],
     expose_headers=["X-RateLimit-Remaining", "X-RateLimit-Reset", "Content-Disposition"],
     max_age=3600,
 )
@@ -443,10 +443,24 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         field = " -> ".join(str(loc) for loc in err.get("loc", []) if loc != "body")
         msg = err.get("msg", "未知错误")
         errors.append(f"{field}: {msg}")
-    
+
+    # 记录请求体和验证错误，便于排查 422 根因
+    try:
+        body = await request.body()
+        body_text = body.decode("utf-8", errors="replace")[:2000]
+    except Exception:
+        body_text = "<unreadable>"
+    logger.warning(
+        "422 validation error: %s %s | body=%s | errors=%s",
+        request.method, request.url.path, body_text, errors
+    )
+
+    # 用第一条错误作为 message，让前端直接显示具体原因
+    first_msg = errors[0] if errors else "参数验证失败"
+
     return JSONResponse(
         status_code=422,
-        content=error(ErrorCode.PARAM_ERROR, "参数验证失败", {"details": errors})
+        content=error(ErrorCode.PARAM_ERROR, first_msg, {"details": errors})
     )
 
 
@@ -609,14 +623,23 @@ async def index():
             "v1": {
                 "nodes": "/api/v1/nodes",
                 "tasks": "/api/v1/tasks",
+                "tasks_start": "/api/v1/tasks/start",
+                "tasks_batch": "/api/v1/tasks/batch",
                 "reviews": "/api/v1/tasks/reviews/pending",
                 "auth": "/api/v1/auth",
+                "health": "/health",
+                "ready": "/ready",
                 "admin": {
                     "nodes": "/api/v1/admin/nodes",
                     "config": "/api/v1/admin/config",
                     "stats": "/api/v1/admin/config/stats",
                 },
                 "webhooks": "/api/v1/webhooks",
+            },
+            "integration": {
+                "response_case": os.environ.get("RESPONSE_CASE", "snake"),
+                "task_auth": os.environ.get("BLOG_WRITER_TASK_AUTH", "auto"),
+                "health_envelope": os.environ.get("BLOG_WRITER_HEALTH_ENVELOPE", "false"),
             },
             "compatibility": "旧路径 /api/* 仍然可用",
         }
@@ -633,8 +656,8 @@ async def health_check():
             llm_ok = True
     except Exception:
         pass
-    
-    return {
+
+    body = {
         "status": "healthy",
         "version": "2.1.0",
         "api_version": "v1",
@@ -644,8 +667,17 @@ async def health_check():
         "llm_provider": "configured" if llm_ok else "not_configured",
         "auth_mode": "sso" if (config.get("security.sso.enabled") or config.get("sso.enabled")) else "local_jwt",
         "deployment_mode": os.environ.get("BLOG_WRITER_MODE", "development"),
+        "task_auth_required": is_task_auth_required(),
         "webhooks_registered": len(_webhook_mgr.get_callbacks()),
     }
+    if os.environ.get("BLOG_WRITER_HEALTH_ENVELOPE", "").lower() in ("1", "true", "yes"):
+        return {
+            "code": 0,
+            "message": "healthy",
+            "data": body,
+            "timestamp": int(time.time()),
+        }
+    return body
 
 
 @app.get("/ready")
@@ -683,16 +715,27 @@ async def readiness_check():
     
     process_ok = checks["database"] == "ok" and checks["config"] == "ok"
     status_code = 200 if process_ok else 503
-    
+
+    body = {
+        "status": "ready" if process_ok else "not_ready",
+        "checks": checks,
+        "capabilities": capabilities,
+        "version": "2.1.0",
+        "uptime_seconds": int(time.time() - _start_time),
+    }
+    if os.environ.get("BLOG_WRITER_HEALTH_ENVELOPE", "").lower() in ("1", "true", "yes"):
+        content = {
+            "code": 0 if process_ok else 503,
+            "message": "ready" if process_ok else "not_ready",
+            "data": body,
+            "timestamp": int(time.time()),
+        }
+    else:
+        content = body
+
     return JSONResponse(
         status_code=status_code,
-        content={
-            "status": "ready" if process_ok else "not_ready",
-            "checks": checks,
-            "capabilities": capabilities,
-            "version": "2.1.0",
-            "uptime_seconds": int(time.time() - _start_time),
-        }
+        content=content,
     )
 
 

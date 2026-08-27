@@ -7,7 +7,7 @@ const Tasks = {
     _currentFileName: null,
     _detailPollTimer: null,
 
-    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens, priority) {
+    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens, priority, brandSiteUrl) {
         if (!keywords) {
             UI.showToast('请输入关键词', 'warn');
             return;
@@ -21,6 +21,7 @@ const Tasks = {
         if (temperature !== undefined) UI.addLog(`   温度系数: ${temperature}`, 'info');
         if (maxTokens !== undefined) UI.addLog(`   最大输出 Token: ${maxTokens}`, 'info');
         if (forbiddenWhitelist) UI.addLog(`   禁用词白名单: ${forbiddenWhitelist}`, 'info');
+        if (brandSiteUrl) UI.addLog(`   品牌官网: ${brandSiteUrl}`, 'info');
 
         try {
             const payload = {
@@ -34,6 +35,7 @@ const Tasks = {
             if (temperature !== undefined) payload.temperature = temperature;
             if (maxTokens !== undefined) payload.max_tokens = maxTokens;
             if (forbiddenWhitelist && String(forbiddenWhitelist).trim()) payload.forbidden_whitelist = String(forbiddenWhitelist).trim();
+            if (brandSiteUrl && String(brandSiteUrl).trim()) payload.brand_site_url = String(brandSiteUrl).trim();
             
             const result = await Api.post('/api/tasks/start', payload);
             
@@ -45,6 +47,11 @@ const Tasks = {
             return result;
         } catch (e) {
             UI.addLog(`   ❌ 启动失败: ${e.message}`, 'error');
+            if (State.taskAuthRequired && Api.isAuthError(e.message)) {
+                Api.promptLogin('当前环境启动任务需要登录或 API Token');
+            } else {
+                UI.showToast(`❌ ${e.message}`, 'error', 5000);
+            }
             throw e;
         }
     },
@@ -105,6 +112,9 @@ const Tasks = {
             Stats.update();
         } catch (e) {
             console.error('Refresh tasks error:', e);
+            if (State.taskAuthRequired && Api.isAuthError(e.message)) {
+                Api.promptLogin('当前环境查看任务需要登录或 API Token');
+            }
             const lastUpdate = document.getElementById('taskLastUpdate');
             if (lastUpdate) {
                 lastUpdate.textContent = '⚠️ 刷新失败';
@@ -113,7 +123,51 @@ const Tasks = {
         }
     },
 
-    _priorityBadge(t) {
+    _taskProgress(task) {
+        const sp = task.step_progress || task.stepProgress;
+        if (sp) {
+            return {
+                current: sp.current ?? task.current_step ?? 0,
+                total: sp.total ?? task.total_steps ?? 0,
+                percent: sp.percent ?? 0,
+                label: sp.completed_count ?? sp.completedCount ?? task.current_step ?? 0,
+            };
+        }
+        const total = task.total_steps || 0;
+        const current = task.current_step || 0;
+        return {
+            current,
+            total,
+            percent: total ? Math.round((current / total) * 100) : 0,
+            label: current,
+        };
+    },
+
+    _renderQualityGates(task) {
+        const el = document.getElementById('taskDetailQualityGates');
+        if (!el) return;
+        const gates = task.quality_gates || task.qualityGates;
+        const summary = task.publish_summary || task.publishSummary;
+        if (!gates && !summary) {
+            el.classList.add('hidden');
+            el.innerHTML = '';
+            return;
+        }
+        const parts = [];
+        if (gates) {
+            const contentOk = gates.content && gates.content.ok;
+            const visualsOk = gates.visuals && gates.visuals.ok;
+            if (gates.content) parts.push(`内容校验: ${contentOk === true ? '通过' : contentOk === false ? '未通过' : '未知'}`);
+            if (gates.visuals) parts.push(`配图校验: ${visualsOk === true ? '通过' : visualsOk === false ? '未通过' : '未知'}`);
+            if (gates.internal_link_count != null) parts.push(`内链: ${gates.internal_link_count} 条`);
+        }
+        if (summary && (summary.post_url || summary.postUrl)) {
+            parts.push(`发布: ${UI.escapeHtml(summary.post_url || summary.postUrl)}`);
+        }
+        el.innerHTML = `<strong>质量门禁</strong> · ${parts.map(p => UI.escapeHtml(p)).join(' · ')}`;
+        el.classList.remove('hidden');
+    },
+
         const priority = (t.extra && t.extra.priority) || 2;
         if (priority === 3) return '<span class="px-1.5 py-0.5 text-xs rounded bg-red-100 text-red-700">🔴 高</span>';
         if (priority === 1) return '<span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-700">🟢 低</span>';
@@ -147,6 +201,8 @@ const Tasks = {
         actions += `<button onclick="event.stopPropagation(); Tasks.showDetail('${UI.escapeAttr(t.task_id)}')" class="btn btn-primary btn-xs" title="查看详情">👁️ 详情</button>`;
         actions += `<button onclick="event.stopPropagation(); Tasks.delete('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="删除任务">🗑️ 删除</button>`;
 
+        const prog = this._taskProgress(t);
+
         return `
             <div class="border rounded-lg p-4 card-hover cursor-pointer" onclick="Tasks.showDetail('${UI.escapeAttr(t.task_id)}')">
                 <div class="flex justify-between items-start">
@@ -163,7 +219,7 @@ const Tasks = {
                 </div>
                 <div class="mt-3 flex justify-between items-center text-xs text-gray-500">
                     <div class="flex gap-3">
-                        <span>📊 ${UI.escapeHtml(t.current_step)}/${UI.escapeHtml(t.total_steps || '?')} 步骤</span>
+                        <span>📊 ${UI.escapeHtml(prog.label)}/${UI.escapeHtml(prog.total || '?')} 步骤 (${prog.percent}%)</span>
                         <span>🎯 ${UI.escapeHtml(t.mode)}</span>
                     </div>
                     ${t.token_usage ? `<span class="text-purple-600 font-medium">🔤 ${UI.formatTokens(t.token_usage)} tokens</span>` : ''}
@@ -227,10 +283,13 @@ const Tasks = {
             statusEl.className = `px-3 py-1 text-sm rounded-full ${UI.getStatusColor(task.status)}`;
             
             // 进度
-            const progress = task.total_steps ? Math.round((task.current_step / task.total_steps) * 100) : 0;
-            document.getElementById('taskDetailProgress').textContent = `📊 ${task.current_step}/${task.total_steps || '?'} 步骤 (${progress}%)`;
-            document.getElementById('taskDetailProgressBar').style.width = `${progress}%`;
+            const prog = this._taskProgress(task);
+            document.getElementById('taskDetailProgress').textContent =
+                `📊 ${prog.label}/${prog.total || '?'} 步骤 (${prog.percent}%)`;
+            document.getElementById('taskDetailProgressBar').style.width = `${prog.percent}%`;
             document.getElementById('taskDetailMode').textContent = `🎯 ${task.mode}`;
+
+            this._renderQualityGates(task);
             
             // Token
             if (task.token_usage) {
@@ -475,12 +534,15 @@ const Tasks = {
         }
     },
 
-    async rerun(taskId, nodeFile, userNote) {
+    async rerun(taskId, nodeFile, userNote, brandSiteUrl) {
         const startNode = nodeFile || 'S000-startup.json';
         if (!confirm(`确定要从 ${startNode} 开始重跑吗？之前的结果会被清除。`)) return;
         try {
             const body = { nodeFile: startNode };
             if (userNote) body.userNote = userNote;
+            if (brandSiteUrl && String(brandSiteUrl).trim()) {
+                body.brandSiteUrl = String(brandSiteUrl).trim();
+            }
             await Api.post(`/api/tasks/${taskId}/rerun-from`, body);
             UI.showToast('✅ 任务已开始重跑', 'success');
             this.refresh();
@@ -512,6 +574,8 @@ const Tasks = {
         select.innerHTML = nodes.map(n => `<option value="${n.file}">${n.file} - ${n.name}</option>`).join('');
         select.value = 'S000-startup.json';
         document.getElementById('rerunUserNote').value = '';
+        const siteInput = document.getElementById('rerunBrandSiteUrl');
+        if (siteInput) siteInput.value = '';
         const modal = document.getElementById('rerunModal');
         modal.classList.remove('hidden');
         modal.classList.add('flex');
@@ -528,9 +592,14 @@ const Tasks = {
         const taskId = this._rerunTaskId;
         const nodeFile = document.getElementById('rerunNodeSelect').value;
         const userNote = document.getElementById('rerunUserNote').value.trim();
+        const brandSiteUrl = (document.getElementById('rerunBrandSiteUrl')?.value || '').trim();
+        if (brandSiteUrl && !/^https?:\/\/.+/i.test(brandSiteUrl)) {
+            UI.showToast('品牌官网地址需以 http:// 或 https:// 开头', 'warn');
+            return;
+        }
         if (!taskId || !nodeFile) return;
         this.closeRerunModal();
-        this.rerun(taskId, nodeFile, userNote);
+        this.rerun(taskId, nodeFile, userNote, brandSiteUrl);
     },
 
     async delete(taskId) {

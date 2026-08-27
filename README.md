@@ -15,7 +15,7 @@
 - **品牌知识库**：多品牌资料管理，自动适配语气风格和禁用词
 - **WordPress发布**：自动生成草稿，写入Rank Math SEO元数据
 - **人工审核**：BID审核、正文审核、Gate审核三级质量把控
-- **Webhook回调**：任务终态自动通知，支持HMAC-SHA256签名验证
+- **Webhook回调**：可订阅终态与步骤事件，HMAC-SHA256 验签；支持幂等启动与批量编排
 
 ---
 
@@ -57,7 +57,8 @@ docker compose up -d
 | [docs/使用指南.md](docs/使用指南.md) | 配置说明 + 服务器部署 | 运维 |
 | [docs/integration/对接指南.md](docs/integration/对接指南.md) | API接口 + 完整调用示例 + 错误码 | 开发 |
 | [docs/架构流程图.md](docs/架构流程图.md) | 系统架构与工作流节点 | 架构/开发 |
-| [docs/integration/openapi.json](docs/integration/openapi.json) | 完整OpenAPI规范 | 开发 |
+| [docs/integration/openapi.json](docs/integration/openapi.json) | 完整OpenAPI规范（含 batch / Idempotency-Key） | 开发 |
+| [scripts/generate_java_client.sh](scripts/generate_java_client.sh) | 从 OpenAPI 生成 Java 客户端 | 开发 |
 
 ---
 

@@ -198,5 +198,6 @@ References 节格式：
 4. References 条数 ≥ 2 → `validate_content.py`
 5. References 无笼统概括 → `validate_content.py`
 6. References 无品牌域名 → `validate_content.py`
+7. 正文至少 1 条品牌域名内链 → `validate_content.py`
 
 正文写入后必须运行验证脚本，不通过则退回修改。

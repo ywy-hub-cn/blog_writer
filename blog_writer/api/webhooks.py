@@ -96,8 +96,15 @@ class WebhookManager:
         except Exception:
             return None
     
-    def register(self, task_id: str, callback_url: str, secret: str = ""):
-        """注册任务回调"""
+    def register(
+        self,
+        task_id: str,
+        callback_url: str,
+        secret: str = "",
+        events: Optional[List[str]] = None,
+    ):
+        """注册任务回调；events 为空则使用默认事件集。"""
+        from blog_writer.api.integration_events import normalize_callback_events
         from blog_writer.security.url_safety import is_safe_webhook_url
 
         ok, reason = is_safe_webhook_url(callback_url, resolve_dns=True)
@@ -108,7 +115,8 @@ class WebhookManager:
             "url": callback_url,
             "secret": secret,
             "created_at": datetime.now().isoformat(),
-            "events": [],
+            "events": normalize_callback_events(events),
+            "delivery_events": [],
         }
         with self._lock:
             self._callbacks[task_id] = payload
@@ -129,17 +137,37 @@ class WebhookManager:
         restored = self._load_persisted(task_id)
         if restored:
             with self._lock:
-                self._callbacks[task_id] = restored
+                self._callbacks[task_id] = self._normalize_callback_record(restored)
             return True
         return False
     
+    def _normalize_callback_record(self, cb: Dict[str, Any]) -> Dict[str, Any]:
+        """兼容旧版持久化结构（events 曾为投递历史）。"""
+        from blog_writer.api.integration_events import normalize_callback_events
+
+        out = dict(cb)
+        events = out.get("events")
+        if "delivery_events" not in out:
+            if events and isinstance(events, list) and events and isinstance(events[0], dict):
+                out["delivery_events"] = events
+                out["events"] = normalize_callback_events(None)
+            else:
+                out["delivery_events"] = []
+                out["events"] = normalize_callback_events(events if isinstance(events, list) else None)
+        else:
+            out["events"] = normalize_callback_events(
+                events if isinstance(events, list) and (not events or isinstance(events[0], str)) else None
+            )
+        return out
+
     def get_callback(self, task_id: str) -> Optional[Dict]:
         with self._lock:
             cb = self._callbacks.get(task_id)
             if cb:
-                return cb
+                return self._normalize_callback_record(cb)
         restored = self._load_persisted(task_id)
         if restored:
+            restored = self._normalize_callback_record(restored)
             with self._lock:
                 self._callbacks[task_id] = restored
             return restored
@@ -152,28 +180,37 @@ class WebhookManager:
         callback = self.get_callback(task_id)
         if not callback:
             return False
-        
-        payload = {
-            "event": event,
-            "task_id": task_id,
-            "data": data or {},
-            "timestamp": int(time.time()),
-            "signature": "",
-        }
-        
+
+        from blog_writer.api.integration_events import should_fire_event, build_webhook_payload
+
+        registered_events = callback.get("events")
+        if not should_fire_event(registered_events, event):
+            logger.debug("Webhook skipped (filtered): %s -> %s", task_id, event)
+            return False
+
+        signature = ""
+        payload = build_webhook_payload(
+            event,
+            task_id,
+            data=data,
+            signature="",
+            timestamp=int(time.time()),
+        )
+        body_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        body = body_str.encode("utf-8")
         if callback["secret"]:
-            payload["signature"] = self._sign(payload, callback["secret"])
+            signature = self._sign_raw(body_str, callback["secret"])
         
         with self._lock:
             if task_id in self._callbacks:
                 cb = self._callbacks[task_id]
-                cb["events"].append({
+                cb["delivery_events"].append({
                     "event": event,
                     "timestamp": payload["timestamp"],
                     "data_preview": str(data)[:200] if data else "",
                 })
-                if len(cb["events"]) > 100:
-                    cb["events"] = cb["events"][-100:]
+                if len(cb["delivery_events"]) > 100:
+                    cb["delivery_events"] = cb["delivery_events"][-100:]
                 # 同步事件历史到 StateStore（重启可恢复 event_count）
                 self._persist_callback(task_id, cb)
         
@@ -183,9 +220,10 @@ class WebhookManager:
                 success = await asyncio.to_thread(
                     self._send_http_request,
                     callback["url"],
-                    payload,
+                    body,
                     task_id,
-                    event
+                    event,
+                    signature,
                 )
                 if success:
                     return True
@@ -199,7 +237,14 @@ class WebhookManager:
         self._record_history(task_id, event, callback["url"], False, f"retries_exhausted:{last_error}")
         return False
     
-    def _send_http_request(self, url: str, payload: Dict, task_id: str, event: str) -> bool:
+    def _send_http_request(
+        self,
+        url: str,
+        body: bytes,
+        task_id: str,
+        event: str,
+        signature: str = "",
+    ) -> bool:
         """发送HTTP请求（在独立线程中执行，不阻塞事件循环）
 
         防 DNS rebinding：解析阶段校验 IP 后，用解析到的 IP 建立 TCP 连接，
@@ -248,10 +293,10 @@ class WebhookManager:
             self._record_history(task_id, event, url, False, "no_safe_ip")
             return False
 
-        body = json.dumps(payload).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
-            "X-Webhook-Signature": payload.get("signature", ""),
+            "X-Webhook-Signature": signature,
+            "X-Signature": f"sha256={signature}" if signature else "",
             "X-Webhook-Event": event,
             "X-Task-ID": task_id,
             "Host": host,
@@ -293,16 +338,23 @@ class WebhookManager:
                 except Exception:
                     pass
     
-    def _sign(self, payload: Dict, secret: str) -> str:
-        """HMAC 签名：覆盖 event/task_id/timestamp 与 data 内容，防篡改。"""
-        data_raw = json.dumps(payload.get("data") or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        content = f"{payload['event']}.{payload['task_id']}.{payload['timestamp']}.{data_raw}"
-        signature = hmac.new(
+    def _sign_raw(self, content: str, secret: str) -> str:
+        return hmac.new(
             secret.encode("utf-8"),
             content.encode("utf-8"),
-            hashlib.sha256
+            hashlib.sha256,
         ).hexdigest()
-        return signature
+
+    def _sign(self, payload: Dict, secret: str) -> str:
+        """HMAC 签名（旧嵌套 data 格式，保留兼容）。"""
+        data_raw = json.dumps(
+            payload.get("data") or {},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        content = f"{payload['event']}.{payload['task_id']}.{payload['timestamp']}.{data_raw}"
+        return self._sign_raw(content, secret)
     
     def _record_history(self, task_id: str, event: str, url: str, success: bool, detail: str):
         """记录回调历史（线程安全）"""
@@ -332,11 +384,14 @@ class WebhookManager:
         with self._lock:
             result = {}
             for tid, cb in self._callbacks.items():
+                normalized = self._normalize_callback_record(cb)
+                deliveries = normalized.get("delivery_events") or []
                 result[tid] = {
-                    "url": cb["url"],
-                    "created_at": cb["created_at"],
-                    "event_count": len(cb["events"]),
-                    "last_event": cb["events"][-1]["event"] if cb["events"] else None,
+                    "url": normalized["url"],
+                    "created_at": normalized["created_at"],
+                    "events": normalized.get("events") or [],
+                    "delivery_count": len(deliveries),
+                    "last_event": deliveries[-1]["event"] if deliveries else None,
                 }
             return result
 

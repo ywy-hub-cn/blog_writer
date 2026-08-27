@@ -7,6 +7,7 @@ const App = {
         Auth.init();
         this._bindEvents();
         this._startPolling();
+        this._checkSystem();
         
         IframeBridge.ready();
         
@@ -16,6 +17,7 @@ const App = {
         Tasks.refresh();
         Stats.update();
         Brands.load();
+        if (typeof updateUserNoteCount === 'function') updateUserNoteCount();
     },
 
     _bindEvents() {
@@ -48,7 +50,10 @@ const App = {
     async _checkSystem() {
         try {
             const resp = await fetch('/health');
-            const data = await resp.json();
+            const json = await resp.json();
+            const data = (json && json.data) ? json.data : json;
+            State.taskAuthRequired = !!data.task_auth_required;
+
             const statusEl = document.querySelector('#systemStatus span:last-child');
             const dot = document.querySelector('#systemStatus span:first-child');
             
@@ -61,6 +66,12 @@ const App = {
             } else {
                 if (dot) dot.className = 'w-2 h-2 bg-red-500 rounded-full';
                 if (statusEl) statusEl.textContent = '系统异常';
+            }
+
+            if (State.taskAuthRequired && typeof Auth !== 'undefined' && !Auth.isLoggedIn()) {
+                Auth.showLoginHint('外部对接模式：启动任务需 API Token 或登录');
+            } else if (typeof Auth !== 'undefined') {
+                Auth.hideLoginHint();
             }
         } catch (e) {
             console.error('Health check failed:', e);
@@ -97,12 +108,51 @@ function doLogin() {
 }
 function doLogout() { Auth.logout(); }
 function switchTab(tab) { Tabs.switch(tab); }
-function startTask() {
+function updateUserNoteCount() {
+    const note = document.getElementById('userNote')?.value || '';
+    const countEl = document.getElementById('userNoteCount');
+    if (countEl) countEl.textContent = `${[...note].length} 字`;
+}
+
+function openStartConfirmModal() {
     const brandPath = Brands.getSelectedPath();
     if (!brandPath) {
         UI.showToast('请先选择品牌', 'warn');
         return;
     }
+    const keywords = (document.getElementById('keywords')?.value || '').trim();
+    if (!keywords) {
+        UI.showToast('请输入关键词', 'warn');
+        return;
+    }
+    const siteUrl = (document.getElementById('brandSiteUrl')?.value || '').trim();
+    if (siteUrl && !/^https?:\/\/.+/i.test(siteUrl)) {
+        UI.showToast('品牌官网地址需以 http:// 或 https:// 开头', 'warn');
+        return;
+    }
+    const note = document.getElementById('userNote')?.value || '';
+    const brandSelect = document.getElementById('brandSelect');
+    const brandLabel = brandSelect?.selectedOptions?.[0]?.textContent?.trim() || brandPath;
+    document.getElementById('startConfirmBrand').textContent = brandLabel;
+    document.getElementById('startConfirmKeywords').textContent = keywords;
+    document.getElementById('startConfirmSiteUrl').textContent = siteUrl || '（未填写）';
+    document.getElementById('startConfirmNote').textContent = note.trim() ? note : '（未填写）';
+    document.getElementById('startConfirmNoteCount').textContent = `${[...note].length} 字`;
+    const modal = document.getElementById('startConfirmModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeStartConfirmModal() {
+    const modal = document.getElementById('startConfirmModal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+function confirmStartTask() {
+    closeStartConfirmModal();
+    const brandPath = Brands.getSelectedPath();
     const temperature = document.getElementById('temperature')?.value;
     const maxTokens = document.getElementById('maxTokens')?.value;
     const priority = document.getElementById('taskPriority')?.value || '2';
@@ -115,8 +165,13 @@ function startTask() {
         document.getElementById('aiModel')?.value || 'default',
         temperature ? parseFloat(temperature) : undefined,
         maxTokens ? parseInt(maxTokens) : undefined,
-        parseInt(priority)
+        parseInt(priority),
+        document.getElementById('brandSiteUrl')?.value || ''
     );
+}
+
+function startTask() {
+    openStartConfirmModal();
 }
 function refreshTasks() { Tasks.refresh(); }
 function showTaskDetail(id) { Tasks.showDetail(id); }

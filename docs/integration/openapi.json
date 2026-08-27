@@ -208,6 +208,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "requestBody": {
@@ -216,6 +232,50 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/StartTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/batch": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Batch Start Tasks",
+        "operationId": "batch_start_tasks_api_v1_tasks_batch_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchStartRequest"
               }
             }
           }
@@ -2277,6 +2337,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "requestBody": {
@@ -2285,6 +2361,50 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/StartTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/batch": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Batch Start Tasks",
+        "operationId": "batch_start_tasks_api_tasks_batch_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchStartRequest"
               }
             }
           }
@@ -5199,6 +5319,17 @@
             "type": "string",
             "title": "Mode",
             "default": "auto"
+          },
+          "userNote": {
+            "type": "string",
+            "title": "Usernote",
+            "default": ""
+          },
+          "brandSiteUrl": {
+            "type": "string",
+            "title": "Brandsiteurl",
+            "description": "品牌官网 URL（可选；不传时 S000 会尝试从品牌知识库提取；用于内链校验与媒体库封面匹配）",
+            "default": ""
           }
         },
         "type": "object",
@@ -5287,6 +5418,7 @@
           "userNote": {
             "type": "string",
             "title": "Usernote",
+            "description": "附加写作要求，无字数硬限制",
             "default": ""
           },
           "mode": {
@@ -5297,6 +5429,7 @@
           "brandSiteUrl": {
             "type": "string",
             "title": "Brandsiteurl",
+            "description": "品牌官网 URL（可选；不传时 S000 会尝试从品牌知识库提取；用于内链校验与媒体库封面匹配）",
             "default": ""
           },
           "forbiddenWhitelist": {
@@ -5371,6 +5504,21 @@
               }
             ],
             "title": "Callbacksecret"
+          },
+          "callbackEvents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callbackevents",
+            "description": "订阅的 Webhook 事件列表"
           }
         },
         "type": "object",
@@ -5379,6 +5527,134 @@
           "keywords"
         ],
         "title": "StartTaskRequest"
+      },
+      "BatchTaskItem": {
+        "properties": {
+          "keywords": {
+            "type": "string",
+            "title": "Keywords"
+          },
+          "userNote": {
+            "type": "string",
+            "title": "Usernote",
+            "default": ""
+          },
+          "brandSiteUrl": {
+            "type": "string",
+            "title": "Brandsiteurl",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "keywords"
+        ],
+        "title": "BatchTaskItem"
+      },
+      "BatchStartRequest": {
+        "properties": {
+          "brandPath": {
+            "type": "string",
+            "title": "Brandpath"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "auto"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority",
+            "default": 2
+          },
+          "userNote": {
+            "type": "string",
+            "title": "Usernote",
+            "default": ""
+          },
+          "brandSiteUrl": {
+            "type": "string",
+            "title": "Brandsiteurl",
+            "default": ""
+          },
+          "forbiddenWhitelist": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forbiddenwhitelist"
+          },
+          "batchId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batchid"
+          },
+          "callbackUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callbackurl"
+          },
+          "callbackSecret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callbacksecret"
+          },
+          "callbackEvents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callbackevents"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/BatchTaskItem"
+            },
+            "type": "array",
+            "title": "Tasks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "brandPath",
+          "tasks"
+        ],
+        "title": "BatchStartRequest"
       },
       "ValidationError": {
         "properties": {

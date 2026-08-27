@@ -7,6 +7,7 @@ const State = {
     currentNodeId: null,
     apiKeyVisible: false,
     pollingTimers: [],
+    taskAuthRequired: false,
 
     addTimer(fn, delay) {
         const id = setInterval(fn, delay);

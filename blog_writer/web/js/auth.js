@@ -123,12 +123,16 @@ const Auth = {
         const hint = document.getElementById('loginHint');
         if (hint) {
             hint.textContent = msg;
+            hint.style.display = 'block';
             hint.classList.remove('hidden');
         }
     },
 
     hideLoginHint() {
         const hint = document.getElementById('loginHint');
-        if (hint) hint.classList.add('hidden');
+        if (hint) {
+            hint.style.display = 'none';
+            hint.classList.add('hidden');
+        }
     }
 };
