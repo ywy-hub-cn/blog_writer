@@ -51,8 +51,11 @@ const App = {
         try {
             const resp = await fetch('/health');
             const json = await resp.json();
-            const data = (json && json.data) ? json.data : json;
-            State.taskAuthRequired = !!data.task_auth_required;
+            const raw = (json && json.data) ? json.data : json;
+            const data = (typeof Api !== 'undefined' && Api._normalizeData)
+                ? Api._normalizeData(raw)
+                : raw;
+            State.taskAuthRequired = !!(data.task_auth_required ?? data.taskAuthRequired);
 
             const statusEl = document.querySelector('#systemStatus span:last-child');
             const dot = document.querySelector('#systemStatus span:first-child');

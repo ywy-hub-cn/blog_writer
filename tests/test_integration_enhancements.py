@@ -210,3 +210,46 @@ class TestWebhookCallbackRecord:
         body = r.json()
         assert body.get("code") == 0
         assert body.get("data", {}).get("status") == "healthy"
+
+
+class TestJavaDeploymentHardening:
+    def test_redis_url_does_not_auto_enable_state_store(self, monkeypatch):
+        import blog_writer.state_store as ss
+
+        monkeypatch.setenv("BLOG_WRITER_STATE_BACKEND", "memory")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        with ss._store_lock:
+            ss._store = None
+        store = ss.get_state_store()
+        assert type(store).__name__ == "MemoryStateStore"
+
+    def test_camel_case_brands_and_task_start(self, integration_client, monkeypatch):
+        client, _ = integration_client
+        monkeypatch.setenv("RESPONSE_CASE", "camel")
+
+        brands = client.get("/api/brands").json()
+        assert brands["code"] == 0
+        item = brands["data"]["brands"][0]
+        assert "displayName" in item or "display_name" in item
+        assert "innerPath" in item or "inner_path" in item
+
+        r = client.post(
+            "/api/v1/tasks/start",
+            json={"brandPath": "sms-boosting", "keywords": "camel deploy test"},
+        )
+        assert r.status_code == 200
+        data = _unwrap(r.json())
+        assert data.get("task_id") or data.get("taskId")
+        assert data.get("status") == "started"
+
+    def test_anonymous_task_start_with_invalid_bearer(self, integration_client):
+        client, _ = integration_client
+        r = client.post(
+            "/api/tasks/start",
+            headers={"Authorization": "Bearer invalid-token"},
+            json={"brandPath": "sms-boosting", "keywords": "anon test"},
+        )
+        assert r.status_code == 200
+        data = _unwrap(r.json())
+        task_id = data.get("task_id") or data.get("taskId") or ""
+        assert str(task_id).startswith("task_")

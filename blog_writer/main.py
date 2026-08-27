@@ -668,6 +668,8 @@ async def health_check():
         "auth_mode": "sso" if (config.get("security.sso.enabled") or config.get("sso.enabled")) else "local_jwt",
         "deployment_mode": os.environ.get("BLOG_WRITER_MODE", "development"),
         "task_auth_required": is_task_auth_required(),
+        "state_backend": os.environ.get("BLOG_WRITER_STATE_BACKEND", "memory").strip().lower() or "memory",
+        "response_case": os.environ.get("RESPONSE_CASE", "snake").strip().lower() or "snake",
         "webhooks_registered": len(_webhook_mgr.get_callbacks()),
     }
     if os.environ.get("BLOG_WRITER_HEALTH_ENVELOPE", "").lower() in ("1", "true", "yes"):

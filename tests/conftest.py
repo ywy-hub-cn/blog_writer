@@ -46,6 +46,8 @@ def _isolate_auth_env(monkeypatch):
         "BLOG_WRITER_OPERATOR_PASSWORD",
     ):
         monkeypatch.delenv(var, raising=False)
+    # 防止 shell/.env 中 RESPONSE_CASE=camel 污染期望 snake_case 的测试
+    monkeypatch.setenv("RESPONSE_CASE", "snake")
     yield
 
 

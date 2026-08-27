@@ -118,8 +118,9 @@ def get_state_store() -> StateStore:
             return _store
         backend = os.environ.get("BLOG_WRITER_STATE_BACKEND", "").strip().lower()
         redis_url = os.environ.get("REDIS_URL", "").strip()
+        # 默认 memory；不因环境里存在 REDIS_URL（其他 Java 服务共用）而自动切 Redis
         if not backend:
-            backend = "redis" if redis_url else "memory"
+            backend = "memory"
         if backend == "redis":
             url = redis_url or "redis://localhost:6379/0"
             try:
