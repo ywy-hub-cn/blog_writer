@@ -56,6 +56,34 @@ def test_setup_brand_writes_whitelist(tmp_path: Path):
     assert "保证" in data["words"]
 
 
+def test_setup_brand_autofills_brand_site_url(tmp_path: Path):
+    brand = tmp_path / "brand"
+    brand.mkdir()
+    (brand / "品牌知识库.md").write_text(
+        "# 知识\n品牌官网：https://smsboosting.com\nAlso https://smsboosting.com/blog/a\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    cmd = [
+        sys.executable,
+        str(TOOLS / "setup_brand.py"),
+        "--brand-path",
+        str(brand),
+        "--keywords",
+        "OTP SMS",
+        "--out-dir",
+        str(out),
+    ]
+    env = dict(**{**dict(**__import__("os").environ), "PYTHONIOENCODING": "utf-8"})
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+    assert r.returncode == 0, (r.stdout or "") + (r.stderr or "")
+    startup = (out / "001 启动确认.md").read_text(encoding="utf-8")
+    assert "## 品牌官网" in startup
+    assert "https://smsboosting.com" in startup
+    assert "**品牌官网**: https://smsboosting.com" in startup
+
+
 def test_check_forbidden_respects_whitelist(tmp_path: Path):
     (tmp_path / "001 启动确认.md").write_text(
         "## 禁用词原文\n\n- 最好\n- 保证\n\n## 本次禁用词白名单\n\n- 保证\n",

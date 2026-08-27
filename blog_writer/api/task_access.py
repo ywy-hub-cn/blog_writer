@@ -9,6 +9,20 @@ from fastapi import HTTPException, status
 PRIVILEGED_ROLES = frozenset({"admin", "service"})
 
 
+def is_anonymous_user(user: Optional[Dict[str, Any]]) -> bool:
+    """Web UI 免登录访客（非管理员）。"""
+    if not user:
+        return True
+    if user.get("auth_type") == "anonymous":
+        return True
+    return str(user.get("role") or "") == "anonymous"
+
+
+def has_open_task_access(user: Optional[Dict[str, Any]]) -> bool:
+    """匿名或未隔离部署：任务读写不做归属过滤（与旧版 UI 行为一致）。"""
+    return is_privileged(user) or is_anonymous_user(user)
+
+
 def is_privileged(user: Optional[Dict[str, Any]]) -> bool:
     if not user:
         return False
@@ -45,7 +59,7 @@ def assert_task_access(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="任务不存在",
         )
-    if is_privileged(user):
+    if has_open_task_access(user):
         return task
 
     uid = get_user_id(user)
@@ -69,7 +83,7 @@ def filter_tasks_for_user(
     user: Dict[str, Any],
     tasks: list,
 ) -> list:
-    if is_privileged(user):
+    if has_open_task_access(user):
         return tasks
     uid = get_user_id(user)
     if not uid:

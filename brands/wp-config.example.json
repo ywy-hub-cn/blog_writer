@@ -41,5 +41,5 @@
     "{instance_dir}/../../brands/wp-config.json"
   ],
 
-  "_dry_run": "未找到此文件时，脚本自动切换 dry-run 模式，生成 post_id=1 的模拟发布记录，不阻塞工作流"
+  "_dry_run": "未找到此文件时，publish_to_wp.py 默认 hard fail（不再自动伪造成功）。仅开发者显式传入 --dry-run 时才写入 post_id=0、images_ready 标记本地图片是否已解析的联调记录。"
 }

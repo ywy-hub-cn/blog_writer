@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from html import escape
 
+_TOOLS_DIR = Path(__file__).resolve().parent
+if str(_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_DIR))
+from brand_site_url import resolve_brand_site_url  # noqa: E402
+
 
 CSS = """
 :root {
@@ -180,23 +185,36 @@ def _dig(bid: Dict[str, Any], *keys: str, default: str = "") -> str:
 
 def extract_meta(bid: Dict[str, Any], brand_site_url: str = "") -> Dict[str, str]:
     seo = bid.get("seo") if isinstance(bid.get("seo"), dict) else {}
+    summary = bid.get("summary") if isinstance(bid.get("summary"), dict) else {}
     title = (
         _dig(bid, "title")
         or _dig(seo, "title")
+        or _dig(summary, "title")
         or _dig(bid, "keyword")
         or "Untitled"
     )
-    seo_title = _dig(bid, "seo_title") or _dig(seo, "seo_title") or title
-    slug = _dig(bid, "slug") or _dig(seo, "slug") or "article"
+    seo_title = (
+        _dig(bid, "seo_title")
+        or _dig(seo, "seo_title")
+        or _dig(summary, "seo_title")
+        or title
+    )
+    slug = _dig(bid, "slug") or _dig(seo, "slug") or _dig(summary, "slug") or "article"
     meta = (
         _dig(bid, "meta_description")
         or _dig(seo, "meta_description")
+        or _dig(summary, "meta_description")
         or _dig(seo, "description")
         or title
     )
     if len(meta) > 160:
         meta = meta[:160]
-    keyword = _dig(bid, "keyword") or _dig(seo, "keyword") or ""
+    keyword = (
+        _dig(bid, "keyword")
+        or _dig(seo, "keyword")
+        or _dig(summary, "keyword")
+        or ""
+    )
     site = brand_site_url.rstrip("/")
     url = f"{site}/{slug}" if site else ""
     return {
@@ -212,10 +230,7 @@ def extract_meta(bid: Dict[str, Any], brand_site_url: str = "") -> Dict[str, str
 
 def extract_brand_site_url(out_dir: Path, fallback: str = "") -> str:
     startup = _read(out_dir / "001 启动确认.md")
-    m = re.search(r"##\s*品牌官网\s*\n+([^\n#]+)", startup)
-    if m:
-        return m.group(1).strip()
-    return (fallback or "").strip()
+    return resolve_brand_site_url(startup, fallback)
 
 
 def estimate_read_time(html_body: str) -> int:
@@ -302,6 +317,17 @@ def generate(out_dir: Path, brand_site_url: str = "") -> Path:
 
     out_path = out_dir / "006 呈现文档.html"
     out_path.write_text(html_doc, encoding="utf-8")
+    # S007 曾依赖仓库中不存在的 Unsplash/Pexels 脚本，导致流水线只有告警、
+    # 没有任何图片。呈现阶段确定性注入可用视觉元素，确保后续发布包始终带图。
+    import importlib.util
+
+    visual_script = Path(__file__).resolve().parent / "inject_visuals.py"
+    spec = importlib.util.spec_from_file_location("inject_visuals", visual_script)
+    if not spec or not spec.loader:
+        raise SystemExit("ERROR: 无法加载 inject_visuals.py")
+    visual_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(visual_mod)
+    visual_mod.run(out_dir, media_site_url=site)
     print(f"OK: wrote {out_path.name} (read-time={minutes}min)", file=sys.stderr)
     print(f"OK: {out_path}")
     return out_path

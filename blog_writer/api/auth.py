@@ -120,7 +120,19 @@ async def login(request: Request, login_req: LoginRequest):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="已启用 SSO，请使用企业统一登录（不接受本地密码登录）"
             )
-        result = AuthManager.login_with_role(login_req.password)
+        try:
+            result = AuthManager.login_with_role(login_req.password)
+        except RuntimeError as e:
+            msg = str(e)
+            if "token store" in msg.lower() or "redis" in msg.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="登录会话存储不可用（请检查 Redis 或改用 BLOG_WRITER_STATE_BACKEND=memory）",
+                ) from e
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"登录失败: {msg[:200]}",
+            ) from e
         if result:
             token, role = result
             return LoginResponse(

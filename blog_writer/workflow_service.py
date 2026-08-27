@@ -773,9 +773,11 @@ class WorkflowService(TaskControlMixin):
             webhook_mgr = get_webhook_manager()
             if not webhook_mgr.has_callback(task_id):
                 return
+            payload = dict(data or {})
+            payload.setdefault("task_id", task_id)
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(webhook_mgr.fire(task_id, event, data))
+                task = loop.create_task(webhook_mgr.fire(task_id, event, payload))
                 # 持有引用防止 GC 回收，并在异常时记录
                 _bg_tasks_webhook.add(task)
                 task.add_done_callback(_bg_tasks_webhook.discard)
@@ -783,10 +785,30 @@ class WorkflowService(TaskControlMixin):
                 # 同步上下文：使用共享线程池执行
                 _shared_executor.submit(
                     asyncio.run,
-                    webhook_mgr.fire(task_id, event, data)
+                    webhook_mgr.fire(task_id, event, payload),
                 )
         except Exception as e:
             logger.warning(f"Webhook 触发失败 {task_id}/{event}: {e}")
+
+    def _webhook_payload_extra(self, task_id: str) -> Dict[str, Any]:
+        from blog_writer.api.integration_events import collect_output_files
+        from blog_writer.api.task_enrichment import read_quality_gates
+
+        instance_dir = self.instance_root / task_id
+        if not instance_dir.is_dir():
+            return {}
+        extra: Dict[str, Any] = {
+            "output_files": collect_output_files(instance_dir),
+        }
+        gates = read_quality_gates(instance_dir)
+        publish = gates.get("publish") or {}
+        if publish:
+            extra["post_id"] = publish.get("post_id")
+            extra["post_url"] = publish.get("post_url")
+            extra["images_ready"] = publish.get("images_ready")
+            extra["dry_run"] = publish.get("dry_run")
+            extra["publish_status"] = publish.get("status")
+        return extra
     
     def _validate_and_return(self, state: Dict[str, Any], task_id: str, source: str) -> Optional[Dict[str, Any]]:
         """验证状态数据完整性"""
@@ -1797,6 +1819,19 @@ class WorkflowService(TaskControlMixin):
                 # 增量落盘：审核等待/重启前不能只存 completed_steps
                 self._sync_runtime_state(task_id, outputs, node_results)
                 self._save_state(task_id)
+                self._fire_task_webhook(
+                    task_id,
+                    "task.step_completed",
+                    {
+                        "task_id": task_id,
+                        "status": self._tasks[task_id].get("status", "running"),
+                        "step_file": step_file,
+                        "node_id": node_id,
+                        "step_index": step_idx + 1,
+                        "total_steps": len(step_files),
+                        "keywords": self._tasks[task_id].get("keywords", ""),
+                    },
+                )
 
                 exceeded, used, limit = token_budget_exceeded(
                     node_results,
@@ -1926,13 +1961,17 @@ class WorkflowService(TaskControlMixin):
         self._save_state(task_id)
         
         # 触发 webhook 通知
-        self._fire_task_webhook(task_id, f"task.{final_status}", {
+        webhook_data = {
             "task_id": task_id,
             "status": final_status,
             "steps_completed": total_steps_completed,
             "total_steps": len(step_files),
             "total_tokens": total_tokens,
-        })
+            "token_usage": total_tokens,
+            "keywords": self._tasks[task_id].get("keywords", ""),
+        }
+        webhook_data.update(self._webhook_payload_extra(task_id))
+        self._fire_task_webhook(task_id, f"task.{final_status}", webhook_data)
 
         # 终态后延迟清理内存字典，降低长期运行 OOM 风险（DB 仍为真相源）
         if final_status in (
@@ -2011,6 +2050,7 @@ class WorkflowService(TaskControlMixin):
         keywords: str = "",
         mode: str = "auto",
         user_note: str = "",
+        brand_site_url: str = "",
         log_callback: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
         """从指定节点重新运行（忽略之前的结果）"""
@@ -2096,7 +2136,7 @@ class WorkflowService(TaskControlMixin):
             "brand_path": brand_path or state.get("brand_path", ""),
             "keywords": keywords or state.get("keywords", ""),
             "user_note": user_note or state.get("user_note", ""),
-            "brand_site_url": state.get("brand_site_url", ""),
+            "brand_site_url": brand_site_url or state.get("brand_site_url", ""),
             "forbidden_whitelist": whitelist,
             "forbidden_whitelist_csv": ",".join(whitelist),
             "mode": mode,
@@ -2109,6 +2149,7 @@ class WorkflowService(TaskControlMixin):
         self._tasks[task_id]["completed_steps"] = completed_steps
         self._tasks[task_id]["results"] = results
         self._tasks[task_id]["outputs"] = outputs
+        self._tasks[task_id]["brand_site_url"] = params["brand_site_url"]
         self._save_state(task_id)
         
         await self._execute_steps(

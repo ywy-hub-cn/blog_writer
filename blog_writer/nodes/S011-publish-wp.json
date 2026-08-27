@@ -32,7 +32,9 @@
   "constraints": {
     "must": [
       "先运行 assemble_publish.py 确保 007 发布包.json 存在",
-      "调用确定性脚本 publish_to_wp.py，不使用 LLM 判断"
+      "调用确定性脚本 publish_to_wp.py，不使用 LLM 判断",
+      "真实发布前必须上传并替换所有本地正文图片；任一图片失败必须 hard fail，不得创建无图草稿",
+      "未找到 wp-config.json 时不得伪造成功发布记录；仅显式 --dry-run 可生成 post_id=0 的联调记录"
     ],
     "forbidden": [
       "在代码中硬编码 WordPress 用户名或密码（从 wp-config.json 读取）",
@@ -43,7 +45,7 @@
     {
       "id": 1,
       "name": "WordPress 发布",
-      "workflow": "使用 run_script 跑确定性发布脚本（不要手写发布记录）：\n\n```\nrun_script(\"publish_to_wp.py\", [\"--out-dir\", \".\", \"--brand-path\", \"{brand_path}\"])\n```\n\n等价命令：\n```bash\npython3 ../../tools/blog-writer/publish_to_wp.py --out-dir . --brand-path \"{brand_path}\"\n```\n\n脚本行为：\n1. 读 007 发布包.json / .md\n2. 若存在 wp-config.json → 上传封面并创建 WordPress draft + Rank Math\n3. 若无 wp-config.json → **自动 dry-run**，仍写入 发布记录.json（post_id>0, status=draft, dry_run=true）\n4. 产出 发布记录.json 后验证存在即可\n\n真发布需在品牌目录提供 wp-config.json（见 brands/*/wp-config.example.json）。",
+      "workflow": "使用 run_script 跑确定性发布脚本（不要手写发布记录）：\n\n```\nrun_script(\"publish_to_wp.py\", [\"--out-dir\", \".\", \"--brand-path\", \"{brand_path}\"])\n```\n\n等价命令：\n```bash\npython3 ../../tools/blog-writer/publish_to_wp.py --out-dir . --brand-path \"{brand_path}\"\n```\n\n脚本行为：\n1. 读 007 发布包.json / .md\n2. 上传所有本地正文图片到 WordPress 媒体库，并将 HTML src 替换为媒体库绝对 URL\n3. 任一正文图片上传失败或仍有本地/data 地址 → hard fail，不创建无图草稿\n4. 图片全部就绪后创建 WordPress draft + Rank Math，并在发布记录中写 images_ready=true\n5. 若无 wp-config.json → hard fail；仅开发者显式传 --dry-run 时允许联调，且 post_id=0，不得视为发布成功\n\n真发布需在品牌目录提供 wp-config.json（见 brands/*/wp-config.example.json）。",
       "output": {
         "id": "publish_record",
         "name": "发布记录",
@@ -74,8 +76,14 @@
     {
       "id": 4,
       "rule": "发布状态为 draft（非意外发布）",
-      "on_fail": "warn",
+      "on_fail": "hard_fail",
       "target": "file:发布记录.json::exec:python3 -c 'import json; d=json.load(open(\"发布记录.json\")); exit(0 if d.get(\"status\")==\"draft\" else 1)'"
+    },
+    {
+      "id": 5,
+      "rule": "正文图片全部可发布（images_ready=true）",
+      "on_fail": "hard_fail",
+      "target": "file:发布记录.json::exec:python3 -c 'import json; d=json.load(open(\"发布记录.json\")); exit(0 if d.get(\"images_ready\") is True else 1)'"
     }
   ],
   "params": {

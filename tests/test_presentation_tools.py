@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools" / "blog-writer"
 
@@ -16,6 +18,19 @@ def _load(name: str):
     assert spec and spec.loader
     spec.loader.exec_module(mod)
     return mod
+
+
+def test_field_markup_preserves_underscores_in_urls(tmp_path: Path):
+    field = _load("field_markup.py")
+    draft = """# Title
+
+## References
+- [YaningAI](https://www.yaningai.com/blog_detail_0008) — routing note
+"""
+    html_body = field.field_markup(draft)
+    assert "blog_detail_0008" in html_body
+    assert "<em>detail</em>" not in html_body
+    assert 'href="https://www.yaningai.com/blog_detail_0008"' in html_body
 
 
 def test_field_markup_and_presentation(tmp_path: Path):
@@ -84,9 +99,55 @@ Usually under one second for major corridors.
     assert 'name="description"' in doc
     assert "og:title" in doc
     assert "twitter:card" in doc
+    assert 'data-seq="cover"' in doc
+    assert doc.count('data-seq="mermaid-') == 2
+    assert 'src="visual-cover.png"' in doc
+    assert (tmp_path / "visual-cover.png").read_bytes().startswith(b"\x89PNG")
+    assert (tmp_path / "visual-section-1.png").exists()
+    assert (tmp_path / "visual-section-2.png").exists()
+    assert "cdn.jsdelivr.net/npm/mermaid@11" in doc
 
 
-def test_publish_to_wp_auto_dry_run_without_config(tmp_path: Path):
+def test_presentation_reads_bid_summary_metadata():
+    present = _load("generate_presentation.py")
+    meta = present.extract_meta(
+        {
+            "summary": {
+                "title": "OTP SMS Explained",
+                "seo_title": "OTP SMS Developer Guide",
+                "slug": "otp-sms-guide",
+                "meta_description": "A practical OTP SMS guide.",
+                "keyword": "OTP SMS",
+            }
+        }
+    )
+    assert meta["title"] == "OTP SMS Explained"
+    assert meta["slug"] == "otp-sms-guide"
+    assert meta["keyword"] == "OTP SMS"
+
+
+def test_presentation_ignores_placeholder_brand_site(tmp_path: Path):
+    present = _load("generate_presentation.py")
+    (tmp_path / "001 启动确认.md").write_text(
+        "## 品牌官网\n未提供\n",
+        encoding="utf-8",
+    )
+    assert (
+        present.extract_brand_site_url(tmp_path, "https://smsboosting.com")
+        == "https://smsboosting.com"
+    )
+
+
+def test_presentation_reads_inline_brand_site_from_setup_format(tmp_path: Path):
+    present = _load("generate_presentation.py")
+    (tmp_path / "001 启动确认.md").write_text(
+        "# 启动确认\n## 基本信息\n- **品牌官网**: https://smsboosting.com\n",
+        encoding="utf-8",
+    )
+    assert present.extract_brand_site_url(tmp_path) == "https://smsboosting.com"
+
+
+def test_publish_to_wp_requires_explicit_dry_run_without_config(tmp_path: Path):
     (tmp_path / "007 发布包.json").write_text(
         json.dumps(
             {
@@ -108,9 +169,13 @@ def test_publish_to_wp_auto_dry_run_without_config(tmp_path: Path):
     )
 
     mod = _load("publish_to_wp.py")
-    record = mod.publish(tmp_path, brand_path="", dry_run=False)
+    with pytest.raises(SystemExit, match="wp-config.json"):
+        mod.publish(tmp_path, brand_path="", dry_run=False)
+
+    record = mod.publish(tmp_path, brand_path="", dry_run=True)
     assert record["dry_run"] is True
-    assert record["post_id"] > 0
+    assert record["post_id"] == 0
+    assert record["status"] == "dry-run"
     assert (tmp_path / "发布记录.json").exists()
 
 

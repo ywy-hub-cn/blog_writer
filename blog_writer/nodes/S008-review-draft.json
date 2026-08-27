@@ -72,9 +72,11 @@
       "spawn 独立 session 做评审，不继承本步对话上下文",
       "评审 session 只读 004 正文.md 和 002 内容PRD.md",
       "封面图（<figure data-seq=\"cover\">）必须存在且有 <img src=...>",
-      "正文内视觉元素（Mermaid 或图片）≥ 3 个",
+      "正文内视觉元素（主题流程图/决策图）1-2 个，不得为凑数堆砌同质架构图",
       "FAQ 必须使用 <details class=\"faq-item\"> 折叠格式",
       "图片/Mermaid与文章主题相关，不使用随机占位图",
+      "逐个核对正文 [N] 前的事实、数字或引语与 References 第 N 条来源名称、URL 和说明是否语义一致；仅编号未越界不代表通过",
+      "发现引用错源、编号错位或越界时，issues 必须包含“引用映射错误”并判定 passed=false",
       "Focus keyword 在正文中至少出现 3 次（H2/H3 中的也算）",
       "Focus keyword 出现在文章前 10% 内容中",
       "Focus keyword 出现在至少 1 个 H2/H3 中",
@@ -121,6 +123,12 @@
       "id": 4,
       "rule": "自审结果 issues 列表不含 \"引用缺少可核验URL\"（如果有该 issue 则视为不通过，无论 passed 字段如何）",
       "on_fail": "pass=false",
+      "target": "file:008 自审结果.md"
+    },
+    {
+      "id": 5,
+      "rule": "自审结果 issues 列表不含“引用映射错误”；必须逐条核对事实主张与对应 References 来源，而非只检查编号范围",
+      "on_fail": "hard_fail",
       "target": "file:008 自审结果.md"
     }
   ],

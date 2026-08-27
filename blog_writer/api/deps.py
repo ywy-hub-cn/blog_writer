@@ -8,6 +8,16 @@ from typing import Optional
 from blog_writer.security.auth import AuthManager
 
 
+def is_task_auth_required() -> bool:
+    """任务 API 是否强制鉴权。
+
+    仅当显式设置 BLOG_WRITER_TASK_AUTH=required 时启用。
+    Web UI 默认可匿名使用；Java 对接生产环境再按需开启。
+    """
+    explicit = os.environ.get("BLOG_WRITER_TASK_AUTH", "").strip().lower()
+    return explicit in ("required", "true", "1", "yes")
+
+
 # Bearer认证
 security = HTTPBearer(auto_error=False)
 

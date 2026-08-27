@@ -12,7 +12,7 @@ from pydantic import BaseModel, field_validator, model_validator, ConfigDict, Fi
 
 from blog_writer.service_manager import get_service
 from blog_writer.api.webhooks import get_webhook_manager
-from blog_writer.api.deps import get_current_user, security, verify_admin_access
+from blog_writer.api.deps import get_current_user, security, verify_admin_access, is_task_auth_required
 from blog_writer.api.task_access import (
     assert_task_access,
     filter_tasks_for_user,
@@ -53,28 +53,18 @@ async def get_optional_user(
 ) -> dict:
     """任务接口鉴权。
 
-    BLOG_WRITER_TASK_AUTH=required|optional（默认：production 必填，development 可选）
-    管理员接口（nodes/config）仍始终使用 get_current_user。
+    默认允许匿名使用（启动/查询/控制任务）；仅当 BLOG_WRITER_TASK_AUTH=required 时强制 Token。
+    管理员能力（节点/配置）仍走 get_current_user，与任务接口分离。
     """
-    import os
-
-    def _task_auth_required() -> bool:
-        explicit = os.environ.get("BLOG_WRITER_TASK_AUTH", "").strip().lower()
-        if explicit in ("required", "true", "1", "yes"):
-            return True
-        if explicit in ("optional", "false", "0", "no"):
-            return False
-        return os.environ.get("BLOG_WRITER_MODE", "development") == "production"
-
     try:
         return await get_current_user(request, credentials, x_api_key)
     except HTTPException:
-        if _task_auth_required():
+        if is_task_auth_required():
             raise
         return {
-            "is_admin": True,
-            "user_id": "operator",
-            "role": "admin",
+            "is_admin": False,
+            "user_id": "anonymous",
+            "role": "anonymous",
             "auth_type": "anonymous",
             "token_created_at": None,
         }

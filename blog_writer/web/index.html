@@ -27,7 +27,7 @@
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
             </div>
             <h2>管理员登录</h2>
-            <p class="modal-subtitle">输入密码解锁管理功能</p>
+            <p class="modal-subtitle">登录后解锁节点编辑、系统配置等管理功能</p>
             <div class="modal-body">
                 <label>管理员密码</label>
                 <input id="adminPassword" type="password" placeholder="请输入密码" autofocus>
@@ -182,8 +182,17 @@
                                     <input id="keywords" type="text" placeholder="SMS API integration" class="form-input">
                                 </div>
                                 <div class="form-group">
+                                    <label class="form-label">品牌官网地址（可选）</label>
+                                    <input id="brandSiteUrl" type="url" placeholder="https://smsboosting.com" class="form-input">
+                                    <p class="form-hint">用于站内内链校验与媒体库封面匹配；不填时会尝试从品牌知识库提取，仍无则后续校验可能失败</p>
+                                </div>
+                                <div class="form-group">
                                     <label class="form-label">附加要求（可选）</label>
-                                    <textarea id="userNote" rows="2" placeholder="偏向技术受众，突出API易用性" class="form-textarea"></textarea>
+                                    <textarea id="userNote" rows="4" placeholder="偏向技术受众，突出API易用性；可粘贴长指令、表格行或改稿要求，无字数上限" class="form-textarea" oninput="updateUserNoteCount()"></textarea>
+                                    <div class="flex justify-between items-center mt-1">
+                                        <p class="form-hint">无字数硬限制；启动前会弹出确认框显示字数</p>
+                                        <span id="userNoteCount" class="text-xs text-gray-500">0 字</span>
+                                    </div>
                                 </div>
                                 <div class="form-group">
                                     <label class="form-label">禁用词白名单（可选）</label>
@@ -574,6 +583,9 @@
                 <div id="taskDetailProgressBar" class="bg-blue-500 h-2 rounded-full transition-all" style="width: 0%"></div>
             </div>
 
+            <!-- 质量门禁摘要（API: quality_gates / publish_summary） -->
+            <div id="taskDetailQualityGates" class="hidden mb-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-700"></div>
+
             <!-- Tab切换 -->
             <div class="flex gap-2 border-b border-gray-200 mb-4">
                 <button onclick="Tasks.switchDetailTab('files')" id="tabDetailFiles" class="px-4 py-2 text-sm font-medium border-b-2 border-blue-500 text-blue-600">📁 生成文件</button>
@@ -612,6 +624,45 @@
         </div>
     </div>
 
+    <!-- ========== 启动任务确认弹窗 ========== -->
+    <div id="startConfirmModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="modal-bg" onclick="closeStartConfirmModal()"></div>
+        <div class="modal-card" style="width: 36rem; max-width: 90vw;">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold">确认启动任务</h3>
+                    <p class="text-sm text-gray-500 mt-1">请确认关键词与附加要求后再启动</p>
+                </div>
+                <button onclick="closeStartConfirmModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+            <div class="space-y-3 text-sm">
+                <div>
+                    <div class="text-gray-500 mb-1">品牌</div>
+                    <div id="startConfirmBrand" class="font-medium break-all"></div>
+                </div>
+                <div>
+                    <div class="text-gray-500 mb-1">关键词</div>
+                    <div id="startConfirmKeywords" class="font-medium break-all"></div>
+                </div>
+                <div>
+                    <div class="text-gray-500 mb-1">品牌官网</div>
+                    <div id="startConfirmSiteUrl" class="font-medium break-all"></div>
+                </div>
+                <div>
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-gray-500">附加要求</span>
+                        <span id="startConfirmNoteCount" class="text-xs text-gray-500">0 字</span>
+                    </div>
+                    <pre id="startConfirmNote" class="bg-gray-50 border border-gray-200 rounded-lg p-3 whitespace-pre-wrap break-words max-h-48 overflow-y-auto text-gray-700"></pre>
+                </div>
+            </div>
+            <div class="flex gap-3 justify-end pt-4">
+                <button onclick="closeStartConfirmModal()" class="btn btn-outline">取消</button>
+                <button onclick="confirmStartTask()" class="btn btn-primary">确认启动</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ========== 选节点重跑弹窗 ========== -->
     <div id="rerunModal" class="fixed inset-0 z-50 hidden items-center justify-center">
         <div class="modal-bg" onclick="Tasks.closeRerunModal()"></div>
@@ -632,6 +683,11 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">重跑要求（可选）</label>
                     <textarea id="rerunUserNote" rows="3" placeholder="输入对本次重跑的特殊要求，如：调整文章语气为更专业、增加更多代码示例等" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">品牌官网地址（可选）</label>
+                    <input id="rerunBrandSiteUrl" type="url" placeholder="留空则沿用任务原值；填写则覆盖" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <p class="text-xs text-gray-500 mt-1">用于内链校验与媒体库封面匹配</p>
                 </div>
                 <div class="flex gap-3 justify-end pt-2">
                     <button onclick="Tasks.closeRerunModal()" class="btn btn-outline">取消</button>

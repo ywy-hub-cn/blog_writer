@@ -152,6 +152,13 @@ class TestE2EHealthAndAuth:
         assert r.status_code == 200
 
     def test_unauthorized_access_blocked(self, e2e_client):
+        # development 模式任务列表允许免登录；生产环境才强制鉴权
+        r = e2e_client.get("/api/v1/tasks")
+        assert r.status_code == 200
+
+    def test_unauthorized_access_blocked_in_production(self, e2e_client, monkeypatch):
+        monkeypatch.setenv("BLOG_WRITER_MODE", "production")
+        monkeypatch.setenv("BLOG_WRITER_TASK_AUTH", "required")
         r = e2e_client.get("/api/v1/tasks")
         assert r.status_code in (401, 403)
 
