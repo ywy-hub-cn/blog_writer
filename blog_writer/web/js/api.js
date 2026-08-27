@@ -5,7 +5,24 @@
 
 const Api = {
     _baseUrl: '',
-    
+
+    /** camelCase → snake_case（兼容 RESPONSE_CASE=camel 的后端） */
+    _camelToSnakeKey(key) {
+        if (!key || key.indexOf('_') >= 0 || key === key.toUpperCase()) return key;
+        return key.replace(/([A-Z])/g, (m) => '_' + m.toLowerCase());
+    },
+
+    _normalizeData(obj) {
+        if (obj === null || obj === undefined) return obj;
+        if (Array.isArray(obj)) return obj.map((item) => this._normalizeData(item));
+        if (typeof obj !== 'object') return obj;
+        const out = {};
+        for (const [key, val] of Object.entries(obj)) {
+            out[this._camelToSnakeKey(key)] = this._normalizeData(val);
+        }
+        return out;
+    },
+
     setBaseUrl(url) {
         this._baseUrl = url || '';
     },
@@ -81,14 +98,14 @@ const Api = {
                 if (json.code !== 0) {
                     throw new Error(json.message || `业务错误 ${json.code}`);
                 }
-                const data = json.data;
+                const data = this._normalizeData(json.data);
                 if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
                     return { ...data, code: json.code, message: json.message };
                 }
                 // data 为数组/标量时，保留在 data 字段，同时摊平常见包装
                 return { data, code: json.code, message: json.message };
             }
-            return json;
+            return this._normalizeData(json);
         } catch (e) {
             if (e instanceof TypeError) {
                 throw new Error('网络连接失败，请检查服务状态');
