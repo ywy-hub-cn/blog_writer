@@ -168,6 +168,7 @@ const Tasks = {
         el.classList.remove('hidden');
     },
 
+    _priorityBadge(t) {
         const priority = (t.extra && t.extra.priority) || 2;
         if (priority === 3) return '<span class="px-1.5 py-0.5 text-xs rounded bg-red-100 text-red-700">🔴 高</span>';
         if (priority === 1) return '<span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-700">🟢 低</span>';

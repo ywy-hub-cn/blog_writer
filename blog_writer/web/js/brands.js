@@ -40,9 +40,14 @@ const Brands = {
             if (prevSelected && this._pathMap[prevSelected]) {
                 select.value = prevSelected;
             }
+
+            if (brands.length === 0) {
+                UI.addLog('ℹ️ 暂无品牌，请先上传品牌资料', 'warn');
+            }
         } catch (e) {
-            // 列表接口为公开读取，正常不会 401；其他错误静默记录即可
             console.warn('加载品牌列表失败:', e);
+            UI.showToast(`品牌列表加载失败: ${e.message}`, 'error', 5000);
+            UI.addLog(`❌ 品牌列表加载失败: ${e.message}`, 'error');
         }
     },
 
