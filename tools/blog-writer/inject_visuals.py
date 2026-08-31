@@ -13,17 +13,63 @@ import urllib.request
 from pathlib import Path
 from typing import List, Optional
 
+_TOOLS_DIR = Path(__file__).resolve().parent
+if str(_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_DIR))
 
-MERMAID_HEAD = """
+
+MERMAID_HEAD_SMS = """
 <!-- Mermaid CDN（主：jsdelivr，备：unpkg） -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script>
 if (typeof mermaid === "undefined") {
   document.write('<script src="https://unpkg.com/mermaid@11/dist/mermaid.min.js">\\x3C/script>');
 }
-mermaid.initialize({startOnLoad:true,theme:"neutral",flowchart:{useMaxWidth:true,htmlLabels:true},securityLevel:"loose"});
+mermaid.initialize({
+  startOnLoad:true,
+  theme:"base",
+  themeVariables:{
+    primaryColor:"#EEF3EC",
+    primaryTextColor:"#132019",
+    primaryBorderColor:"#5D765F",
+    lineColor:"#5D765F",
+    secondaryColor:"#F5F8F3",
+    tertiaryColor:"#FBFCF8",
+    fontFamily:"Georgia, Times New Roman, serif"
+  },
+  flowchart:{useMaxWidth:true,htmlLabels:true,curve:"basis"},
+  securityLevel:"loose"
+});
 </script>
 """.strip()
+
+MERMAID_HEAD_TRAFFIC = """
+<!-- Mermaid CDN（主：jsdelivr，备：unpkg） -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+if (typeof mermaid === "undefined") {
+  document.write('<script src="https://unpkg.com/mermaid@11/dist/mermaid.min.js">\\x3C/script>');
+}
+mermaid.initialize({
+  startOnLoad:true,
+  theme:"base",
+  themeVariables:{
+    primaryColor:"#F5F5F5",
+    primaryTextColor:"#18181B",
+    primaryBorderColor:"#B22222",
+    lineColor:"#52525B",
+    secondaryColor:"#FFFFFF",
+    tertiaryColor:"#F4F4F6",
+    fontFamily:"Inter, system-ui, sans-serif"
+  },
+  flowchart:{useMaxWidth:true,htmlLabels:true,curve:"basis"},
+  securityLevel:"loose"
+});
+</script>
+""".strip()
+
+# Backward-compatible alias used by older tests / callers
+MERMAID_HEAD = MERMAID_HEAD_SMS
 
 PALETTES = [
     {
@@ -116,17 +162,26 @@ def _extract_h2_headings(document: str) -> List[str]:
 
 
 def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
-    """Reuse a relevant image from the brand's WordPress media library."""
+    """Reuse a relevant image from the brand's WordPress media library.
+
+    Fail-fast: short timeouts and a hard cap on HTTP calls, so unreachable
+    brand sites cannot stall S006/S007 for tens of seconds.
+    """
     if not site_url.startswith(("http://", "https://")):
         return ""
     site_url = site_url.rstrip("/")
+    attempts = {"n": 0}
+    max_attempts = 3
 
     def fetch_json(endpoint: str):
+        if attempts["n"] >= max_attempts:
+            raise TimeoutError("media cover search attempt budget exhausted")
+        attempts["n"] += 1
         request = urllib.request.Request(
             endpoint,
             headers={"User-Agent": "BlogWriter/2.1"},
         )
-        with urllib.request.urlopen(request, timeout=12) as response:
+        with urllib.request.urlopen(request, timeout=3) as response:
             return json.loads(response.read().decode("utf-8"))
 
     # Prefer the cover of the most closely related existing article.
@@ -136,7 +191,7 @@ def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
             + urllib.parse.urlencode(
                 {
                     "search": keyword,
-                    "per_page": 10,
+                    "per_page": 5,
                     "_fields": "title,featured_media",
                 }
             )
@@ -154,7 +209,7 @@ def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
                 + len(title_tokens & post_tokens)
             )
 
-        for post in sorted(posts, key=relevance, reverse=True):
+        for post in sorted(posts, key=relevance, reverse=True)[:2]:
             media_id = int(post.get("featured_media") or 0)
             if not media_id:
                 continue
@@ -166,7 +221,10 @@ def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
             if source.startswith("http"):
                 return source
     except Exception:
-        pass
+        return ""
+
+    if attempts["n"] >= max_attempts:
+        return ""
 
     stopwords = {"the", "and", "for", "how", "with", "from", "guide", "explained"}
     tokens = [
@@ -174,9 +232,11 @@ def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
         for token in re.findall(r"[A-Za-z0-9]+", f"{keyword} {title}")
         if token.lower() not in stopwords and len(token) > 2
     ]
-    queries = [keyword, " ".join(tokens[:3]), *tokens, "SMS"]
+    queries = [keyword, " ".join(tokens[:3])]
     seen = set()
     for query in queries:
+        if attempts["n"] >= max_attempts:
+            break
         query = query.strip()
         if not query or query.lower() in seen:
             continue
@@ -186,7 +246,7 @@ def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
             + urllib.parse.urlencode(
                 {
                     "search": query,
-                    "per_page": 20,
+                    "per_page": 10,
                     "_fields": "id,source_url,alt_text",
                 }
             )
@@ -202,7 +262,7 @@ def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
                 digest = hashlib.sha256(title.encode("utf-8")).digest()
                 return candidates[int.from_bytes(digest[:4], "big") % len(candidates)]
         except Exception:
-            continue
+            return ""
     return ""
 
 
@@ -327,44 +387,275 @@ def _wrap_text(text: str, max_chars: int = 28) -> List[str]:
 TEXT_LEFT_ALIGN = '["<div style=\'text-align:left\'>Key Points<br/>• Core concept<br/>• Main idea<br/>• Important detail</div>"]'
 
 
+_SKIP_SECTION_HINTS = (
+    "faq", "frequently asked", "references", "reference", "conclusion",
+    "summary", "about the author", "related", "disclaimer", "sources",
+    "常见问题", "参考", "结论", "总结", "作者",
+)
+
+_PROCESS_HINTS = (
+    "how", "step", "process", "pipeline", "workflow", "guide", "setup",
+    "implement", "deploy", "install", "deliver", "send", "route", "flow",
+    "流程", "步骤", "如何", "实现", "部署",
+)
+
+_DECISION_HINTS = (
+    "when", "whether", "should", "choose", "decision", "vs", "versus",
+    "compare", "pros", "cons", "trade", "risk", "retry", "fail", "error",
+    "判断", "对比", "选择", "还是", "风险", "失败",
+)
+
+_SEQUENCE_HINTS = (
+    "api", "request", "response", "call", "handshake", "otp", "verify",
+    "auth", "session", "webhook", "callback", "sequence", "latency",
+    "调用", "验证", "请求", "响应", "时序",
+)
+
+_ARCH_HINTS = (
+    "architecture", "system", "stack", "component", "infra", "network",
+    "carrier", "gateway", "platform", "structure", "layer",
+    "架构", "系统", "组件", "网络", "网关",
+)
+
+
+def _heading_blob(heading: str) -> str:
+    return re.sub(r"\s+", " ", (heading or "").lower()).strip()
+
+
+def _should_skip_section(heading: str) -> bool:
+    blob = _heading_blob(heading)
+    return any(h in blob for h in _SKIP_SECTION_HINTS)
+
+
+def _classify_diagram(heading: str, points: List[str], index: int) -> str:
+    """Pick a diagram family from heading semantics (not just section index)."""
+    blob = _heading_blob(heading)
+    point_blob = " ".join(points).lower()
+    combined = f"{blob} {point_blob}"
+
+    scores = {
+        "process": sum(1 for h in _PROCESS_HINTS if h in combined),
+        "decision": sum(1 for h in _DECISION_HINTS if h in combined),
+        "sequence": sum(1 for h in _SEQUENCE_HINTS if h in combined),
+        "architecture": sum(1 for h in _ARCH_HINTS if h in combined),
+        "overview": 1 if index == 0 else 0,
+    }
+    # Numbered steps in extracted points strongly suggest a process chart.
+    if sum(1 for p in points if re.match(r"^\d+[\).\s]", p)) >= 2:
+        scores["process"] += 2
+    if len(points) >= 2 and any(x in combined for x in (" vs ", "versus", "compare", "对比")):
+        scores["decision"] += 2
+
+    best = max(scores, key=scores.get)
+    if scores[best] <= 0:
+        # Stable fallback by index: overview → process → concept map
+        return ("overview", "process", "concept")[min(index, 2)]
+    return best
+
+
+def _short_label(text: str, limit: int = 36) -> str:
+    cleaned = _clean_for_mermaid(text)
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip(" -–,;") + "…"
+
+
+def _extract_section_points(document: str, heading: str, limit: int = 6) -> List[str]:
+    """Pull concrete bullets / lead sentences from the H2 section body."""
+    if not document or not heading:
+        return []
+    # Locate the H2, then read until next H2 / end of section.
+    h2_re = re.compile(
+        r"<h2\b[^>]*>\s*" + re.escape(heading) + r"\s*</h2>([\s\S]*?)(?=<h2\b|</section>|$)",
+        re.I,
+    )
+    # Heading in HTML may contain nested tags — fall back to looser search.
+    match = h2_re.search(document)
+    if not match:
+        loose = re.compile(
+            r"<h2\b[^>]*>([\s\S]*?)</h2>([\s\S]*?)(?=<h2\b|</section>|$)",
+            re.I,
+        )
+        for m in loose.finditer(document):
+            plain = html.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))
+            plain = re.sub(r"\s+", " ", plain).strip()
+            if plain.lower() == heading.lower() or heading.lower() in plain.lower():
+                match = m
+                body = m.group(2)
+                break
+        else:
+            body = ""
+    else:
+        body = match.group(1)
+
+    if not body:
+        return []
+
+    points: List[str] = []
+    seen = set()
+
+    def _add(raw: str) -> None:
+        text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+        text = re.sub(r"\s+", " ", text).strip(" \t\r\n•·-–—:")
+        text = re.sub(r"^[\d]+[\).\s]+", "", text).strip()
+        if len(text) < 4 or len(text) > 90:
+            return
+        key = text.lower()
+        if key in seen:
+            return
+        # Skip pure navigation / CTA fluff
+        low = key
+        if any(x in low for x in ("click here", "read more", "learn more", "photo by")):
+            return
+        seen.add(key)
+        points.append(text)
+
+    for li in re.findall(r"<li\b[^>]*>([\s\S]*?)</li>", body, re.I):
+        _add(li)
+        if len(points) >= limit:
+            return points[:limit]
+
+    for strong in re.findall(r"<(?:strong|b)\b[^>]*>([\s\S]*?)</(?:strong|b)>", body, re.I):
+        _add(strong)
+        if len(points) >= limit:
+            return points[:limit]
+
+    for p in re.findall(r"<p\b[^>]*>([\s\S]*?)</p>", body, re.I):
+        plain = html.unescape(re.sub(r"<[^>]+>", " ", p))
+        plain = re.sub(r"\s+", " ", plain).strip()
+        # Prefer the first clause / sentence as a diagram node
+        clause = re.split(r"(?<=[.!?])\s+|;\s+| — | – ", plain)[0].strip()
+        _add(clause)
+        if len(points) >= limit:
+            return points[:limit]
+
+    return points[:limit]
+
+
+def _fallback_points(heading: str, keyword: str) -> List[str]:
+    """Topic-specific fallbacks when section text is too thin to mine."""
+    topic = _short_label(keyword or heading, 28)
+    head = _short_label(heading, 28)
+    blob = _heading_blob(f"{heading} {keyword}")
+    if any(h in blob for h in _SEQUENCE_HINTS):
+        return [
+            f"App requests {topic}",
+            "Provider routes message",
+            "Carrier delivers",
+            "User verifies code",
+        ]
+    if any(h in blob for h in _DECISION_HINTS):
+        return [
+            f"Evaluate {head}",
+            "Check constraints",
+            "Choose path A or B",
+            "Apply controls",
+        ]
+    if any(h in blob for h in _ARCH_HINTS):
+        return ["Client", "API gateway", topic or "Core service", "Downstream"]
+    return [
+        f"Define {head}",
+        f"Apply {topic}",
+        "Validate outcome",
+        "Iterate and improve",
+    ]
+
+
 def _generate_mermaid_code(
     heading: str,
     keyword: str,
     heading_index: int,
     total_sections: int,
     all_headings: List[str],
+    points: Optional[List[str]] = None,
 ) -> str:
-    """Generate Mermaid diagram code based on heading and article structure."""
-    label = _clean_for_mermaid(heading)
-    kw = _clean_for_mermaid(keyword) if keyword else "topic"
+    """Generate content-aware Mermaid diagram code for a section."""
+    label = _short_label(heading, 40)
+    kw = _short_label(keyword, 28) if keyword else "Topic"
+    nodes = [ _short_label(p, 40) for p in (points or []) if p ]
+    if len(nodes) < 2:
+        nodes = _fallback_points(heading, keyword)
 
-    if heading_index == 0:
-        # Overview mindmap: show all sections
-        nodes = all_headings[:6]
+    kind = _classify_diagram(heading, nodes, heading_index)
+
+    if kind == "overview":
         mindmap = "mindmap\n"
         mindmap += f"  root(({kw}))\n"
-        for node in nodes:
-            clean = _clean_for_mermaid(node)[:30]
-            mindmap += f"    {clean}\n"
+        mindmap += f"    {label}\n"
+        for node in (all_headings[:5] or nodes[:5]):
+            clean = _short_label(node, 28)
+            if clean.lower() == label.lower():
+                continue
+            mindmap += f"      {clean}\n"
+        for node in nodes[:4]:
+            mindmap += f"    {node}\n"
         return mindmap
-    elif heading_index == 1:
-        # Process flowchart for the first detailed section
-        clean = _clean_for_mermaid(heading)[:25]
-        flowchart = "flowchart TD\n"
-        flowchart += f'    A["{clean}"] --> B[Key Concepts]\n'
-        flowchart += f'    B --> C{TEXT_LEFT_ALIGN}\n'
-        flowchart += f'    C --> D[Implementation]\n'
-        flowchart += f'    D --> E[Best Practices]\n'
-        flowchart += f'    E --> F[Next Steps]\n'
-        return flowchart
-    else:
-        # Knowledge/flow diagram for subsequent sections
-        clean = _clean_for_mermaid(heading)[:25]
-        flowchart = "flowchart LR\n"
-        flowchart += f'    A["{clean}"] --> B[Overview]\n'
-        flowchart += f'    B --> C[Details]\n'
-        flowchart += f'    C --> D[Examples]\n'
-        return flowchart
+
+    if kind == "sequence":
+        actors = nodes[:4]
+        while len(actors) < 3:
+            actors.append(f"Step {len(actors)+1}")
+        a, b, c = actors[0], actors[1], actors[2]
+        d = actors[3] if len(actors) > 3 else "Result"
+        return (
+            "sequenceDiagram\n"
+            f"    participant A as {a}\n"
+            f"    participant B as {b}\n"
+            f"    participant C as {c}\n"
+            f"    A->>B: Initiate {kw}\n"
+            f"    B->>C: Process request\n"
+            f"    C-->>B: Return status\n"
+            f"    B-->>A: Confirm {d}\n"
+        )
+
+    if kind == "decision":
+        left = nodes[0]
+        right = nodes[1] if len(nodes) > 1 else "Alternative"
+        yes = nodes[2] if len(nodes) > 2 else "Proceed"
+        no = nodes[3] if len(nodes) > 3 else "Adjust"
+        return (
+            "flowchart TD\n"
+            f'    Start["{label}"] --> Q{{"Decision point"}}\n'
+            f'    Q -->|Yes| Y["{yes}"]\n'
+            f'    Q -->|No| N["{no}"]\n'
+            f'    Y --> Out["{left}"]\n'
+            f'    N --> Alt["{right}"]\n'
+        )
+
+    if kind == "architecture":
+        parts = nodes[:4]
+        while len(parts) < 3:
+            parts.append(f"Component {len(parts)+1}")
+        lines = ["flowchart LR", f'    subgraph System["{label}"]']
+        ids = []
+        for i, part in enumerate(parts):
+            nid = chr(ord("A") + i)
+            ids.append(nid)
+            lines.append(f'      {nid}["{part}"]')
+        lines.append("    end")
+        for left, right in zip(ids, ids[1:]):
+            lines.append(f"    {left} --> {right}")
+        return "\n".join(lines)
+
+    if kind == "process":
+        lines = ["flowchart TD", f'    S0["{label}"]']
+        prev = "S0"
+        for i, step in enumerate(nodes[:5], start=1):
+            nid = f"S{i}"
+            lines.append(f'    {nid}["{i}. {step}"]')
+            lines.append(f"    {prev} --> {nid}")
+            prev = nid
+        lines.append(f'    Done["Outcome: {kw}"]')
+        lines.append(f"    {prev} --> Done")
+        return "\n".join(lines)
+
+    # concept map default
+    lines = ["flowchart TD", f'    Root["{label}"]']
+    for i, point in enumerate(nodes[:5], start=1):
+        nid = f"N{i}"
+        lines.append(f'    {nid}["{point}"]')
+        lines.append(f"    Root --> {nid}")
+    return "\n".join(lines)
 
 
 def _clean_for_mermaid(text: str) -> str:
@@ -380,16 +671,68 @@ def _clean_for_mermaid(text: str) -> str:
     return cleaned or 'Topic'
 
 
-def _mermaid_figure(index: int, heading: str, keyword: str, diagram_code: str) -> str:
+def _pick_visual_sections(
+    document: str,
+    headings: List[str],
+    needed: int,
+) -> List[tuple]:
+    """Choose the most diagram-worthy H2 sections (skip FAQ/References)."""
+    section_pattern = re.compile(
+        r'(<section\b[^>]*>[\s\S]*?<h2[^>]*>([\s\S]*?)</h2>)',
+        re.I,
+    )
+    matches = list(section_pattern.finditer(document))
+    if len(matches) < MIN_INLINE_VISUALS:
+        matches = list(re.compile(r'(<h2[^>]*>([\s\S]*?)</h2>)', re.I).finditer(document))
+
+    scored = []
+    for match in matches:
+        heading = html.unescape(re.sub(r"<[^>]+>", " ", match.group(2)))
+        heading = re.sub(r"\s+", " ", heading).strip()
+        if not heading or _should_skip_section(heading):
+            continue
+        points = _extract_section_points(document, heading)
+        kind = _classify_diagram(heading, points, len(scored))
+        score = {
+            "process": 5,
+            "decision": 5,
+            "sequence": 4,
+            "architecture": 4,
+            "overview": 2,
+            "concept": 1,
+        }.get(kind, 1)
+        score += min(len(points), 4)
+        # Prefer earlier content sections slightly
+        score += max(0, 3 - len(scored))
+        scored.append((score, match, heading, points, kind))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    chosen = scored[:needed]
+    # Keep document order for insertion stability
+    chosen.sort(key=lambda item: item[1].start())
+    return chosen
+
+
+def _mermaid_figure(index: int, heading: str, keyword: str, diagram_code: str, kind: str = "") -> str:
     """Build a figure containing a Mermaid diagram block."""
-    label = _clean_for_mermaid(heading)
-    alt = html.escape(f"{label} concept diagram", quote=True)
-    caption = html.escape(f"{label} — key concepts and structure", quote=True)
+    label = _short_label(heading, 48)
+    kind_label = {
+        "process": "process flow",
+        "decision": "decision tree",
+        "sequence": "sequence diagram",
+        "architecture": "architecture map",
+        "overview": "topic overview",
+        "concept": "concept map",
+    }.get(kind, "concept diagram")
+    alt = html.escape(f"{label} {kind_label}", quote=True)
+    caption = html.escape(f"{label} — {kind_label} for {keyword or 'this section'}", quote=True)
     return (
         f'<figure class="visual-mermaid" data-field="visual" data-seq="mermaid-{index}" '
         'itemprop="image" itemscope itemtype="https://schema.org/ImageObject">\n'
-        f'<pre class="mermaid" itemprop="contentUrl">{html.escape(diagram_code)}</pre>\n'
         f'<figcaption itemprop="caption">{caption}</figcaption>\n'
+        '<div class="mermaid-container">\n'
+        f'<pre class="mermaid" itemprop="contentUrl">{html.escape(diagram_code)}</pre>\n'
+        '</div>\n'
         "</figure>"
     )
 
@@ -451,6 +794,7 @@ def inject_visuals(
     image_sources: Optional[List[str]] = None,
     keyword: str = "",
     headings: Optional[List[str]] = None,
+    brand_theme: str = "sms",
 ) -> str:
     """Add missing visuals without changing article text or section order."""
     result = document
@@ -478,52 +822,65 @@ def inject_visuals(
     existing = len(re.findall(r'data-seq=["\']mermaid-\d+["\']', result, re.I))
     needed = max(0, TARGET_INLINE_VISUALS - existing)
     if needed:
-        section_pattern = re.compile(
-            r'(<section\b[^>]*>[\s\S]*?<h2[^>]*>([\s\S]*?)</h2>)',
-            re.I,
-        )
-        sections = list(section_pattern.finditer(result))
-        if len(sections) < MIN_INLINE_VISUALS:
-            # If not enough <section> blocks, inject after the first H2 directly
-            h2_pattern = re.compile(
-                r'(<h2[^>]*>([\s\S]*?)</h2>)',
-                re.I,
-            )
-            h2_matches = list(h2_pattern.finditer(result))
-            if len(h2_matches) >= MIN_INLINE_VISUALS:
-                sections = h2_matches
-
-        if len(sections) < MIN_INLINE_VISUALS:
+        chosen = _pick_visual_sections(result, headings, needed)
+        if len(chosen) < MIN_INLINE_VISUALS:
             raise ValueError(
-                f"可注入图表的区块不足 {MIN_INLINE_VISUALS} 个（实际 {len(sections)}）"
+                f"可注入图表的区块不足 {MIN_INLINE_VISUALS} 个（实际 {len(chosen)}）"
             )
 
         additions = []
-        for idx, match in enumerate(sections[:needed], start=existing + 1):
-            if isinstance(match, re.Match):
-                heading_text = re.sub(r"<[^>]+>", " ", match.group(match.lastindex or 2))
-                heading_text = html.unescape(re.sub(r"\s+", " ", heading_text)).strip()
-            else:
-                heading_text = f"Section {idx}"
+        for offset_i, (_score, match, heading_text, points, kind) in enumerate(chosen):
+            idx = existing + offset_i + 1
             diagram_code = _generate_mermaid_code(
-                heading_text, keyword, idx - 1, len(sections), headings
+                heading_text,
+                keyword,
+                offset_i,
+                len(chosen),
+                headings,
+                points=points,
             )
+            # Re-classify with the same points for caption accuracy
+            kind = _classify_diagram(heading_text, points or [], offset_i)
             additions.append(
-                (match.end(), "\n" + _mermaid_figure(idx, heading_text, keyword, diagram_code))
+                (
+                    match.end(),
+                    "\n"
+                    + _mermaid_figure(
+                        idx, heading_text, keyword, diagram_code, kind=kind
+                    ),
+                )
             )
         for offset, addition in reversed(additions):
             result = result[:offset] + addition + result[offset:]
 
-    if "cdn.jsdelivr.net/npm/mermaid@11" not in result:
-        if "</head>" not in result.lower():
-            raise ValueError("缺少 </head>，无法注入 Mermaid CDN")
+    head = MERMAID_HEAD_TRAFFIC if brand_theme == "traffic" else MERMAID_HEAD_SMS
+    # Always refresh Mermaid init so brand themeVariables stay current.
+    result = re.sub(
+        r"<!--\s*Mermaid CDN[\s\S]*?</script>\s*(?:</script>\s*)?",
+        "",
+        result,
+        count=1,
+        flags=re.I,
+    )
+    # Fallback: remove bare mermaid CDN + init scripts if comment marker missing
+    if "cdn.jsdelivr.net/npm/mermaid@11" in result:
         result = re.sub(
-            r"</head>",
-            lambda _match: MERMAID_HEAD + "\n</head>",
+            r'<script[^>]+cdn\.jsdelivr\.net/npm/mermaid@11[^>]*>\s*</script>\s*'
+            r'<script>[\s\S]*?mermaid\.initialize\([\s\S]*?</script>\s*',
+            "",
             result,
             count=1,
             flags=re.I,
         )
+    if "</head>" not in result.lower():
+        raise ValueError("缺少 </head>，无法注入 Mermaid CDN")
+    result = re.sub(
+        r"</head>",
+        lambda _match: head + "\n</head>",
+        result,
+        count=1,
+        flags=re.I,
+    )
 
     return result
 
@@ -538,8 +895,19 @@ def run(out_dir: Path, media_site_url: str = "", strict: bool = False) -> Path:
     keyword = _keyword(out_dir, title)
     headings = _extract_h2_headings(original)
 
-    # 1. Generate SVG cover image
-    palette_index = _variant_for(keyword or title, "palette")
+    brand_theme = "sms"
+    try:
+        from brand_css import resolve_brand_theme
+
+        brand_theme, _ = resolve_brand_theme(out_dir)
+    except Exception:
+        brand_theme = "sms"
+
+    # 1. Generate SVG cover image (palette biased by brand)
+    palette_index = _variant_for(keyword or title, f"palette-{brand_theme}")
+    if brand_theme == "traffic":
+        # Prefer red / purple / orange family for TraffiClimb
+        palette_index = (palette_index % 3) + 3
     cover_svg_path = out_dir / "visual-cover.svg"
     _generate_cover_svg(title, keyword, cover_svg_path, palette_index)
 
@@ -554,12 +922,17 @@ def run(out_dir: Path, media_site_url: str = "", strict: bool = False) -> Path:
     print("   [visual] stripped old visuals for fresh injection", file=sys.stderr)
 
     try:
-        updated = inject_visuals(original, image_sources, keyword=keyword, headings=headings)
+        updated = inject_visuals(
+            original,
+            image_sources,
+            keyword=keyword,
+            headings=headings,
+            brand_theme=brand_theme,
+        )
     except ValueError as exc:
         raise SystemExit(f"ERROR: {exc}") from exc
 
     figures = updated.count("<figure")
-    mermaids = len(re.findall(r'data-seq=["\']mermaid-\d+["\']', updated, re.I))
     mermaid_blocks = len(re.findall(r'<pre class="mermaid"', updated, re.I))
 
     if figures < 1:
@@ -586,7 +959,9 @@ def run(out_dir: Path, media_site_url: str = "", strict: bool = False) -> Path:
             mode_label = "严格模式" if strict else "宽松模式"
             print(f"   [visual] validation passed ({mode_label})", file=sys.stderr)
 
-    print(f"OK: visuals injected figures={figures}, mermaid_diagrams={mermaid_blocks}")
+    print(
+        f"OK: visuals injected figures={figures}, mermaid_diagrams={mermaid_blocks}, theme={brand_theme}"
+    )
     return target
 
 

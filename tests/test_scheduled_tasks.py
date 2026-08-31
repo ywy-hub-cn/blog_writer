@@ -378,3 +378,105 @@ class TestScheduledServiceDispatch:
 
         assert launched["hit"] is False
         assert svc._tasks["task_not_due"]["status"] == "scheduled"
+
+
+class TestOvernightVisibility:
+    """完整链路验证：设定时 → 跑完落库 → 服务重启（模拟过夜）→ 次日仍可见结果。"""
+
+    def test_completed_scheduled_task_survives_restart(self, temp_dir, monkeypatch):
+        # 相同节点的临时实例根与固定 sqlite 路径
+        from pathlib import Path
+        import json, sys
+        from blog_writer.config_manager import ConfigManager
+        from blog_writer.workflow_service import WorkflowService
+
+        instance = Path(temp_dir) / "instance"
+        instance.mkdir(parents=True, exist_ok=True)
+        nodes = Path(__file__).resolve().parents[1] / "blog_writer" / "nodes"
+        sqlite_path = instance / "blog_writer.db"
+
+        cfg_path = Path(temp_dir) / "config.json"
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "workflow": {
+                        "nodes_dir": str(nodes),
+                        "instance_root": str(instance),
+                        "use_database": True,
+                        "use_file_fallback": False,
+                    },
+                    "database": {
+                        "backend": "sqlite",
+                        "sqlite_path": str(sqlite_path),
+                    },
+                    "llm": {"models": {"default": {}}},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        # ================= 第一天：运营设置定时任务 =================
+        cfg1 = ConfigManager(str(cfg_path))
+        svc1 = WorkflowService(cfg1)
+        svc1.pre_register_task(
+            task_id="task_overnight",
+            brand_path="./brands/sms-boosting",
+            keywords="overnight keyword",
+            scheduled_at="2099-12-31T23:00:00+08:00",
+        )
+        t = svc1._tasks["task_overnight"]
+        t["status"] = "scheduled"
+        extra = dict(t["extra"])
+        extra["scheduled_at"] = "2099-12-31T23:00:00+08:00"
+        extra["scheduled_params"] = {
+            "brand_path": "./brands/sms-boosting",
+            "keywords": "overnight keyword",
+            "mode": "auto",
+            "priority": 2,
+            "skip_visual_check": False,
+            "visual_mode": "relaxed",
+            "forbidden_whitelist": [],
+        }
+        t["extra"] = extra
+        svc1._save_state("task_overnight")  # scheduled 状态写库
+
+        # ================= 夜里：调度器触发并跑完 =================
+        t = svc1._tasks["task_overnight"]
+        t["status"] = "completed"
+        t["results"] = [
+            {
+                "node": "S007-visual",
+                "output_path": "instance/task_overnight/final.md",
+                "token_usage": {"total_tokens_used": 1234},
+            }
+        ]
+        t["end_time"] = "2099-12-31T23:30:00+00:00"
+        t["mode"] = "auto"
+        svc1._save_state("task_overnight")  # completed 终态 + 结果写库
+
+        # 关闭第一天服务（清理 DB 连接，模拟服务重启）
+        svc1._db.close_all()
+        from blog_writer.db import DatabaseManager
+        if DatabaseManager._instance is not None:
+            DatabaseManager._instance = None
+        svc1._db = None
+
+        # ================= 第二天：新服务实例，运营打开前端 =================
+        svc2 = WorkflowService(ConfigManager(str(cfg_path)))
+        tasks = svc2.list_tasks()
+        overnight = [x for x in tasks if x["task_id"] == "task_overnight"]
+        assert len(overnight) == 1, "任务不存在（未持久化）"
+        assert overnight[0]["status"] == "completed", (
+            f"状态丢失: {overnight[0]['status']}"
+        )
+        assert overnight[0]["keywords"] == "overnight keyword"
+        assert overnight[0]["token_usage"] == 1234, (
+            f"Token 用量未恢复: {overnight[0]['token_usage']}"
+        )
+
+        # 清理
+        svc2._db.close_all()
+        if DatabaseManager._instance is not None:
+            DatabaseManager._instance = None
+        svc2._db = None
