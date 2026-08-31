@@ -39,8 +39,8 @@ const App = {
     },
 
     _startPolling() {
-        // 任务列表轮询（5秒，状态更新更及时）
-        State.addTimer(() => Tasks.refresh(), 5000);
+        // 任务列表轮询（15秒，避免触发服务端限流 10/60s；有运行中任务时由 poll() 高频更新）
+        State.addTimer(() => Tasks.refresh(), 15000);
         // 统计数据轮询（15秒，未登录时从任务列表计算）
         State.addTimer(() => Stats.update(), 15000);
         // 系统状态检查
@@ -159,6 +159,26 @@ function confirmStartTask() {
     const temperature = document.getElementById('temperature')?.value;
     const maxTokens = document.getElementById('maxTokens')?.value;
     const priority = document.getElementById('taskPriority')?.value || '2';
+    const visualMode = document.getElementById('visualMode')?.value || 'relaxed';
+    const enableSchedule = document.getElementById('enableSchedule')?.checked || false;
+    const scheduledVal = document.getElementById('scheduledAt')?.value || '';
+    let scheduledAt = null;
+    if (enableSchedule) {
+        if (!scheduledVal) {
+            UI.showToast('请选择定时启动时间', 'warn');
+            return;
+        }
+        const d = new Date(scheduledVal);
+        if (isNaN(d.getTime())) {
+            UI.showToast('定时时间格式无效', 'warn');
+            return;
+        }
+        if (d.getTime() <= Date.now()) {
+            UI.showToast('定时时间必须晚于当前时间', 'warn');
+            return;
+        }
+        scheduledAt = d.toISOString();
+    }
     Tasks.start(
         brandPath,
         document.getElementById('keywords').value,
@@ -169,12 +189,25 @@ function confirmStartTask() {
         temperature ? parseFloat(temperature) : undefined,
         maxTokens ? parseInt(maxTokens) : undefined,
         parseInt(priority),
-        document.getElementById('brandSiteUrl')?.value || ''
+        document.getElementById('brandSiteUrl')?.value || '',
+        visualMode,
+        scheduledAt
     );
 }
 
 function startTask() {
     openStartConfirmModal();
+}
+function toggleScheduleInput() {
+    const checked = document.getElementById('enableSchedule')?.checked || false;
+    const group = document.getElementById('scheduleInputGroup');
+    if (group) {
+        group.classList.toggle('hidden', !checked);
+    }
+    if (!checked) {
+        const el = document.getElementById('scheduledAt');
+        if (el) el.value = '';
+    }
 }
 function refreshTasks() { Tasks.refresh(); }
 function showTaskDetail(id) { Tasks.showDetail(id); }
