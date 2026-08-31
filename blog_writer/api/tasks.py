@@ -191,6 +191,9 @@ class StartTaskRequest(BaseModel):
     callback_url: Optional[str] = Field(default=None, alias="callbackUrl")
     callback_secret: Optional[str] = Field(default=None, alias="callbackSecret")
     callback_events: Optional[List[str]] = Field(default=None, alias="callbackEvents")
+    skip_visual_check: bool = Field(default=False, alias="skipVisualCheck")
+    visual_mode: str = Field(default="relaxed", alias="visualMode")
+    scheduled_at: Optional[str] = Field(default=None, alias="scheduledAt")
 
     @model_validator(mode="before")
     @classmethod
@@ -211,6 +214,20 @@ class StartTaskRequest(BaseModel):
                 if merged.get(key):
                     merged["brandPath"] = merged[key]
                     break
+
+        # Backwards compat: skip_visual_check=true maps to visual_mode="placeholder"
+        vm = merged.get("visualMode") or merged.get("visual_mode")
+        if not vm or vm == "relaxed":
+            svc = merged.get("skipVisualCheck") or merged.get("skip_visual_check")
+            if svc:
+                merged["visualMode"] = "placeholder"
+                merged["skipVisualCheck"] = True
+            else:
+                merged.setdefault("visualMode", "relaxed")
+        elif vm == "placeholder":
+            merged["skipVisualCheck"] = True
+        elif vm == "strict":
+            merged["skipVisualCheck"] = False
 
         return merged
 
@@ -280,6 +297,24 @@ class StartTaskRequest(BaseModel):
     def validate_user_note(cls, v: str) -> str:
         # 附加要求不设硬性字数上限；仅清洗控制字符，避免截断运营长指令
         return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", v or "")
+
+    @field_validator("scheduled_at", mode="before")
+    @classmethod
+    def normalize_scheduled_at(cls, v):
+        if v is None or v == "":
+            return None
+        return str(v).strip()
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def validate_scheduled_at(cls, v):
+        if v is None:
+            return None
+        from blog_writer.workflow_service import assert_scheduled_at_is_future
+        try:
+            return assert_scheduled_at_is_future(v)
+        except ValueError as e:
+            raise ValueError(f"定时时间非法: {e}") from e
 
     @field_validator("brand_site_url")
     @classmethod
@@ -352,6 +387,29 @@ class RerunFromRequest(BaseModel):
     mode: str = "auto"
     user_note: str = Field(default="", alias="userNote")
     brand_site_url: str = Field(default="", alias="brandSiteUrl")
+    skip_visual_check: bool = Field(default=False, alias="skipVisualCheck")
+    visual_mode: str = Field(default="relaxed", alias="visualMode")
+
+    @model_validator(mode="before")
+    @classmethod
+    def merge_visual_mode(cls, data: Any) -> Any:
+        """Backwards compat: skip_visual_check=true → visual_mode=placeholder."""
+        if not isinstance(data, dict):
+            return data
+        merged = dict(data)
+        vm = merged.get("visualMode") or merged.get("visual_mode")
+        if not vm or vm == "relaxed":
+            svc = merged.get("skipVisualCheck") or merged.get("skip_visual_check")
+            if svc:
+                merged["visualMode"] = "placeholder"
+                merged["skipVisualCheck"] = True
+            else:
+                merged.setdefault("visualMode", "relaxed")
+        elif vm == "placeholder":
+            merged["skipVisualCheck"] = True
+        elif vm == "strict":
+            merged["skipVisualCheck"] = False
+        return merged
 
     @field_validator("node_file")
     @classmethod
@@ -567,6 +625,8 @@ async def start_task(
         "temperature": req.temperature,
         "max_tokens": req.max_tokens,
         "priority": req.priority,
+        "skip_visual_check": req.skip_visual_check,
+        "visual_mode": req.visual_mode,
     }
 
     if not req.resume_from:
@@ -584,6 +644,10 @@ async def start_task(
                 model=req.model,
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
+                scheduled_at=req.scheduled_at,
+                priority=req.priority,
+                skip_visual_check=req.skip_visual_check,
+                visual_mode=req.visual_mode,
             )
         except ValueError as e:
             msg = str(e)
@@ -597,6 +661,10 @@ async def start_task(
                 status_code=409,
                 detail=f"任务 {task_id} 正在执行中，无法重复启动",
             )
+
+    # 定时任务：仅预注册为 scheduled，由服务器调度器在到期后自动启动。
+    # —— webhook/callback 处理在两条分支都做，避免 scheduled 任务丢失回调。
+    is_scheduled = bool(req.scheduled_at and not req.resume_from)
 
     if req.callback_url:
         try:
@@ -616,10 +684,32 @@ async def start_task(
                     "task_id": task_id,
                     "keywords": req.keywords,
                     "mode": req.mode,
-                    "status": "started",
+                    "status": "scheduled" if is_scheduled else "started",
                 },
             ),
             name=f"webhook:task.created:{task_id}",
+        )
+
+    if is_scheduled:
+        task = service.get_task_status(task_id) or {}
+        extra = dict(task.get("extra") or {})
+        extra["scheduled_at"] = req.scheduled_at
+        # 保存完整启动参数，调度器到期后据此启动
+        extra["scheduled_params"] = {
+            k: v for k, v in kwargs.items() if k not in ("task_id", "resume_from")
+        }
+        task["extra"] = extra
+        service._tasks[task_id] = task
+        service._save_state(task_id)
+        return _enrich_task_dict(
+            {
+                "task_id": task_id,
+                "status": "scheduled",
+                "scheduled_at": req.scheduled_at,
+                "message": "任务已定时，将在指定时间由服务器自动启动",
+                "owner_id": owner_id,
+            },
+            full=False,
         )
 
     _track_task(
@@ -740,6 +830,13 @@ async def get_queued_tasks(_user: dict = Depends(get_optional_user)):
     """获取排队中的任务列表（按优先级排序）。"""
     service = get_service()
     return {"tasks": service.get_queued_tasks()}
+
+
+@router.get("/scheduled")
+async def get_scheduled_tasks(_user: dict = Depends(get_optional_user)):
+    """获取尚未到期的定时任务列表（Java/运营轮询用）。"""
+    service = get_service()
+    return {"tasks": service.list_scheduled_tasks()}
 
 
 @router.post("/{task_id}/cancel-queue")
@@ -890,6 +987,8 @@ async def rerun_from_node(
     mode = task.get("mode") or "auto"
     user_note = req.user_note or task.get("user_note", "")
     brand_site_url = req.brand_site_url or task.get("brand_site_url", "")
+    skip_visual_check = req.skip_visual_check
+    visual_mode = req.visual_mode
     _track_task(
         _safe_start_task(
             service.rerun_from_node(
@@ -900,16 +999,23 @@ async def rerun_from_node(
                 mode=mode,
                 user_note=user_note,
                 brand_site_url=brand_site_url,
+                skip_visual_check=skip_visual_check,
+                visual_mode=visual_mode,
             ),
             task_id=task_id,
         )
     )
+    resp_message = f"从节点 {req.node_file} 开始重跑（清除该节点及之后的结果）"
+    mode_labels = {"relaxed": "宽松校验", "strict": "严格校验", "placeholder": "占位符模式"}
+    resp_message += f" · {mode_labels.get(visual_mode, visual_mode)}"
     return {
         "task_id": task_id,
         "status": "rerunning",
         "rerun_from": req.node_file,
         "mode": mode,
-        "message": f"从节点 {req.node_file} 开始重跑（清除该节点及之后的结果）",
+        "skip_visual_check": skip_visual_check,
+        "visual_mode": visual_mode,
+        "message": resp_message,
     }
 
 

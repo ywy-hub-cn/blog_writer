@@ -405,16 +405,34 @@ _SECURITY_HEADERS = {
 }
 
 
+def _is_task_poll_get(method: str, path: str) -> bool:
+    """任务状态/列表/日志等只读轮询：不计入严格限流（仍保护 start/login 等写接口）。"""
+    if (method or "").upper() != "GET":
+        return False
+    for prefix in ("/api/tasks", "/api/v1/tasks"):
+        if path == prefix or path.startswith(prefix + "/"):
+            # 仍限流敏感子路径（若未来有 GET 侧写操作可在此排除）
+            return True
+    return False
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     rate_limiter = get_rate_limiter()
     client_ip = resolve_client_ip(request)
-    client_id = client_ip
+    # 有 Bearer 时按 token 维度限流，避免 Java 网关与运营浏览器共用同一 NAT IP 互相踩限
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer ") and len(auth) > 20:
+        client_id = f"tok:{auth[7:23]}"
+    else:
+        client_id = client_ip
     path = request.url.path
     
     if path in ("/health", "/ready", "/metrics", "/docs", "/openapi.json", "/", "/redoc", "/favicon.ico"):
         return await call_next(request)
     if path.startswith("/health") or path.startswith("/ready") or path.startswith("/metrics") or path.startswith("/api/metrics") or path.startswith("/api/v1/metrics") or path.startswith("/static"):
+        return await call_next(request)
+    if _is_task_poll_get(request.method, path):
         return await call_next(request)
     
     allowed, reason = rate_limiter.is_allowed(client_id, path)
@@ -813,6 +831,16 @@ async def startup_event():
     
     logger.info(f"   Webhook: 回调机制已就绪")
     logger.info("=" * 60)
+    
+    # 启动定时任务调度器（scheduled 任务到期自动执行）
+    try:
+        service = get_service()
+        service.start_scheduler()
+    except Exception as e:
+        logger.warning(f"   Scheduler: 定时任务调度器启动失败 - {e}")
+    else:
+        logger.info("   Scheduler: 定时任务调度器已启动")
+    
     logger.info("✅ System ready!")
 
 
@@ -820,6 +848,14 @@ async def startup_event():
 async def shutdown_event():
     logger.info("=" * 60)
     logger.info("🛑 Blog-Writer shutting down...")
+    
+    # 0. 停止定时任务调度器
+    try:
+        service = get_service()
+        service.stop_scheduler()
+        logger.info("   Scheduler stopped")
+    except Exception as e:
+        logger.warning(f"   Scheduler stop error: {e}")
     
     # 1. 清理共享线程池（等待正在执行的 webhook 完成）
     try:

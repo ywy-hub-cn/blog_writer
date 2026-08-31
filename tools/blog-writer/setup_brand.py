@@ -26,6 +26,8 @@ def infer_role(filename):
         return '知识库规则'
     if any(k in lower_name for k in ['品牌知识', '知识库', 'knowledg']):
         return '品牌知识'
+    if any(k in lower_name for k in ['visual', 'guideline', 'guidelines', '视觉规范', '视觉']):
+        return '视觉规范'
     if any(k in lower_name for k in ['模板', 'template', '规范', 'seo', '颜色', 'asset']):
         return '其他'
     return '其他'
@@ -125,6 +127,7 @@ def main():
         'has_forbidden_words': False,
         'has_audience_profile': False,
         'has_review_criteria': False,
+        'has_visual_guidelines': False,
         'forbidden_whitelist': whitelist,
     }
     
@@ -153,10 +156,13 @@ def main():
             manifest['has_audience_profile'] = True
         elif role == '评审标准':
             manifest['has_review_criteria'] = True
+        elif role == '视觉规范':
+            manifest['has_visual_guidelines'] = True
         
         with open(src_path, 'r', encoding='utf-8') as f:
             content = f.read()
-            brand_sections[role] = content
+            brand_sections.setdefault(role, [])
+            brand_sections[role].append(content)
             all_urls.extend(extract_urls(content))
     
     wl_path = os.path.join(out_dir, 'forbidden_whitelist.json')
@@ -167,7 +173,9 @@ def main():
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    brand_text_blob = "\n".join(brand_sections.values())
+    brand_text_blob = "\n\n".join(
+        "\n\n".join(parts) for parts in brand_sections.values()
+    )
     site_url = pick_brand_site_url(
         args.brand_site_url,
         all_urls,
@@ -207,27 +215,31 @@ def main():
     
     if manifest['has_brand_knowledge']:
         startup_content += "## 品牌知识原文\n"
-        startup_content += brand_sections.get('品牌知识', '') + "\n\n"
+        startup_content += "\n\n".join(brand_sections.get('品牌知识', [])) + "\n\n"
     
     if manifest['has_tone_guidelines']:
         startup_content += "## 语气调性原文\n"
-        startup_content += brand_sections.get('语气调性', '') + "\n\n"
+        startup_content += "\n\n".join(brand_sections.get('语气调性', [])) + "\n\n"
     
     if manifest['has_forbidden_words']:
         startup_content += "## 禁用词原文\n"
-        startup_content += brand_sections.get('禁用词', '') + "\n\n"
+        startup_content += "\n\n".join(brand_sections.get('禁用词', [])) + "\n\n"
     
     if manifest['has_audience_profile']:
         startup_content += "## 受众画像原文\n"
-        startup_content += brand_sections.get('受众画像', '') + "\n\n"
+        startup_content += "\n\n".join(brand_sections.get('受众画像', [])) + "\n\n"
     
     if manifest['has_review_criteria']:
         startup_content += "## 评审标准原文\n"
-        startup_content += brand_sections.get('评审标准', '') + "\n\n"
+        startup_content += "\n\n".join(brand_sections.get('评审标准', [])) + "\n\n"
+
+    if manifest['has_visual_guidelines']:
+        startup_content += "## 视觉规范原文\n"
+        startup_content += "\n\n".join(brand_sections.get('视觉规范', [])) + "\n\n"
     
     if '其他' in brand_sections:
         startup_content += "## 其他参考原文\n"
-        startup_content += brand_sections.get('其他', '') + "\n\n"
+        startup_content += "\n\n".join(brand_sections.get('其他', [])) + "\n\n"
     
     if all_urls:
         startup_content += "## 提取的URL\n"

@@ -16,6 +16,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
 from brand_site_url import resolve_brand_site_url  # noqa: E402
+from brand_css import resolve_publish_theme_css  # noqa: E402
 
 
 SECTION_ORDER = [
@@ -214,17 +215,21 @@ def extract_article_html(out_dir: Path) -> str:
         inner = body
     else:
         inner = (
-            f'<style id="blog-writer-theme">{PUBLISH_THEME_CSS}</style>\n'
+            f'<style id="blog-writer-theme">{resolve_publish_theme_css(out_dir)}</style>\n'
             '<article class="tuoying-bw-article" itemscope '
             'itemtype="https://schema.org/BlogPosting">\n'
             f"{body}\n"
             "</article>"
         )
 
-    if re.search(r"```mermaid|class=\"mermaid\"|<div class=\"mermaid\">", inner, re.I):
+    if re.search(r"```mermaid|pre class=\"mermaid\"|class=\"mermaid\"|<div class=\"mermaid\">", inner, re.I):
         cdn = (
-            '<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js">'
-            "</script>\n<script>mermaid.initialize({startOnLoad:true});</script>\n"
+            '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js">'
+            "</script>\n<script>"
+            "if(typeof mermaid==='undefined'){"
+            "document.write('<script src=\"https://unpkg.com/mermaid@11/dist/mermaid.min.js\">\\x3C/script>')}"
+            "mermaid.initialize({startOnLoad:true,theme:'neutral',flowchart:{useMaxWidth:true,htmlLabels:true}});"
+            "</script>\n"
         )
         if "mermaid.min.js" not in inner:
             inner = cdn + inner
@@ -249,6 +254,68 @@ def find_cover_image(html: str) -> str:
         return m2.group(1)
     m3 = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I)
     return m3.group(1) if m3 else ""
+
+
+PLACEHOLDER_COVER = (
+    '<figure class="article-cover" data-field="image" data-seq="cover" '
+    'itemprop="image" itemscope itemtype="https://schema.org/ImageObject">'
+    '<div class="image-placeholder" style="width:100%;display:flex;align-items:center;'
+    'justify-content:center;background:#f0f2f1;border:2px dashed #c9d5c5;border-radius:18px;'
+    'min-height:200px;color:#687268;font-size:14px;">'
+    '📷 封面占位图 · 请替换为实际图片</div>'
+    '<figcaption itemprop="caption">封面图占位 — 请后续替换</figcaption></figure>'
+)
+
+PLACEHOLDER_FIGURE_TEMPLATE = (
+    '<figure class="visual-placeholder" data-field="visual" data-seq="placeholder-{index}" '
+    'itemprop="image" itemscope itemtype="https://schema.org/ImageObject">'
+    '<div class="image-placeholder" style="width:100%;display:flex;align-items:center;'
+    'justify-content:center;background:#f0f2f1;border:2px dashed #c9d5c5;border-radius:18px;'
+    'min-height:180px;color:#687268;font-size:14px;">'
+    '📷 图片占位 #{index} · 请替换为实际图片</div>'
+    '<figcaption itemprop="caption">图片占位 #{index} — 请后续替换</figcaption></figure>'
+)
+
+
+def inject_placeholders(html: str, keyword: str = "", title: str = "") -> str:
+    """Inject placeholder figures when visual elements are missing.
+    
+    This allows the publish package to be generated even without proper visuals.
+    Human editors can then replace placeholders with real images later.
+    """
+    result = html
+    
+    # Check for cover
+    has_cover = 'data-seq="cover"' in result.lower()
+    has_visuals = ("<figure" in result.lower()) or ('<pre class="mermaid"' in result.lower())
+    
+    if not has_cover:
+        # Try to inject cover after blog-content opening tag or at the beginning of article
+        content_pattern = re.compile(
+            r'(<div\b[^>]*class=["\'][^"\']*\bblog-content\b[^"\']*["\'][^>]*>)',
+            re.I,
+        )
+        m = content_pattern.search(result)
+        if m:
+            insert_pos = m.end()
+            result = result[:insert_pos] + "\n" + PLACEHOLDER_COVER + result[insert_pos:]
+        else:
+            # No blog-content container, try injecting after <article> or <body>
+            article_m = re.search(r"<article[^>]*>", result, re.I)
+            if article_m:
+                insert_pos = article_m.end()
+                result = result[:insert_pos] + "\n" + PLACEHOLDER_COVER + result[insert_pos:]
+    
+    if not has_visuals:
+        # No visuals at all, inject a placeholder after the first H2
+        h2_m = re.search(r"<h2[^>]*>.*?</h2>", result, re.I)
+        if h2_m:
+            insert_pos = h2_m.end()
+            placeholder_1 = PLACEHOLDER_FIGURE_TEMPLATE.format(index=1)
+            placeholder_2 = PLACEHOLDER_FIGURE_TEMPLATE.format(index=2)
+            result = result[:insert_pos] + "\n" + placeholder_1 + "\n" + placeholder_2 + result[insert_pos:]
+    
+    return result
 
 
 def render_publish_md(fields: Dict[str, str], article_html: str) -> str:
@@ -276,6 +343,7 @@ def assemble(
     title: str = "",
     slug: str = "",
     meta_description: str = "",
+    skip_visual: bool = False,
 ) -> Tuple[Path, Path]:
     bid = _load_bid(out_dir)
     fields = extract_fields(
@@ -290,6 +358,13 @@ def assemble(
     if not article_html:
         raise SystemExit("ERROR: 未找到 006 呈现文档.html / 005 字段化文档.html 可用正文")
 
+    # Skip visual mode: inject placeholder figures when visuals are missing
+    if skip_visual:
+        original_has_visuals = ("<figure" in article_html.lower()) or ('<pre class="mermaid"' in article_html.lower())
+        if not original_has_visuals or 'data-seq="cover"' not in article_html.lower():
+            article_html = inject_placeholders(article_html, keyword=keyword, title=title)
+            print("   [publish] 已启用占位模式，注入图片占位符", file=sys.stderr)
+
     md_path = out_dir / "007 发布包.md"
     json_path = out_dir / "007 发布包.json"
 
@@ -299,6 +374,9 @@ def assemble(
 
     md_path.write_text(render_publish_md(fields, article_html), encoding="utf-8")
 
+    cover_src = find_cover_image(article_html)
+    has_placeholder = "image-placeholder" in article_html
+    
     payload = {
         "schema_version": "1.0",
         "keyword": fields["keyword"],
@@ -307,10 +385,12 @@ def assemble(
         "slug": fields["slug"],
         "meta_description": fields["meta_description"],
         "excerpt": fields["excerpt"],
-        "cover_image": find_cover_image(article_html),
+        "cover_image": cover_src,
         "brand_site_url": site,
         "body_html": article_html,
     }
+    if skip_visual and has_placeholder:
+        payload["visual_placeholders"] = True
     json_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -327,7 +407,8 @@ def assemble(
     if heading_count != 7:
         raise SystemExit(f"ERROR: 期望 7 个 ### 标题，实际 {heading_count}")
 
-    print(f"OK: 已写入 {md_path.name} 与 {json_path.name}")
+    mode_note = "（占位模式）" if (skip_visual and has_placeholder) else ""
+    print(f"OK: 已写入 {md_path.name} 与 {json_path.name} {mode_note}")
     return md_path, json_path
 
 
@@ -339,6 +420,12 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--title", default="")
     parser.add_argument("--slug", default="")
     parser.add_argument("--meta-description", default="")
+    parser.add_argument(
+        "--skip-visual",
+        action="store_true",
+        default=False,
+        help="跳过视觉校验：图片缺失时注入占位符而非报错",
+    )
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out_dir).resolve()
@@ -354,6 +441,7 @@ def main(argv: Optional[list] = None) -> int:
             title=args.title,
             slug=args.slug,
             meta_description=args.meta_description,
+            skip_visual=args.skip_visual,
         )
     except SystemExit as e:
         print(str(e), file=sys.stderr)

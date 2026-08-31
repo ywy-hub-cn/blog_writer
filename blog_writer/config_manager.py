@@ -53,7 +53,11 @@ DEFAULT_CONFIG = {
         "api_token": "",
         "api_token_env": "BLOG_WRITER_API_TOKEN",
         "token_expire_hours": 24,
-        "rate_limit_per_minute": 10,
+        # 运营/Java 轮询任务状态会持续打 GET；10/分钟过严，易 429。
+        # 写操作（start/login）仍由 endpoint 限流单独收紧。
+        "rate_limit_per_minute": 120,
+        "rate_limit_burst": 240,
+        "rate_limit_window_seconds": 60,
         "allowed_origins": ["http://localhost:8000", "http://127.0.0.1:8000"]
     },
     "database": {

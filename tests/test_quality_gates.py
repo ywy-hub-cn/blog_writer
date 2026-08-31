@@ -166,13 +166,22 @@ def test_visual_gate_rejects_placeholder_and_accepts_real_files(tmp_path: Path):
     </body></html>
     """
     (tmp_path / "006 呈现文档.html").write_text(document, encoding="utf-8")
+    # 宽松模式：有效视觉元素通过校验（返回空错误列表）
     assert validator.validate_visuals(tmp_path) == []
 
+    # 宽松模式：placeholder 仅记录警告，不阻塞流程
     (tmp_path / "006 呈现文档.html").write_text(
         document.replace("OTP SMS Guide", "Untitled"),
         encoding="utf-8",
     )
-    assert validator.validate_visuals(tmp_path)
+    # 宽松模式下 placeholder 是警告，不阻塞
+    assert validator.validate_visuals(tmp_path) == []
+    # 验证警告已记录到日志
+    log_content = (tmp_path / "007-visual-validation.log").read_text(encoding="utf-8")
+    assert "untitled" in log_content.lower()
+
+    # 严格模式下 placeholder 仍可被检测为错误
+    assert validator.validate_visuals(tmp_path, strict=True)
 
 
 def test_wordpress_publish_replaces_local_inline_images(tmp_path: Path):

@@ -41,6 +41,9 @@ _shared_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_n
 # webhook fire-and-forget 任务引用集合：防止 asyncio.Task 被 GC 回收
 _bg_tasks_webhook: set = set()
 
+# 定时任务触发的后台启动协程引用集合：防止 asyncio.Task 被 GC 回收
+_scheduled_futures: set = set()
+
 # 向后兼容别名（外部模块可能引用这些常量）
 DEFAULT_MAX_RETRIES = MAX_RETRIES
 DEFAULT_RETRY_DELAY_SECONDS = RETRY_DELAY
@@ -49,6 +52,58 @@ DEFAULT_RETRY_DELAY_SECONDS = RETRY_DELAY
 def priority_label(priority: int) -> str:
     """优先级数字转中文标签。"""
     return {3: "高", 2: "中", 1: "低"}.get(priority, "中")
+
+
+def parse_scheduled_at(value) -> datetime:
+    """解析定时时间字符串为 UTC aware datetime。
+
+    支持 ISO 格式，可带时区偏移或 'Z' 后缀；无时区时视为服务器本地时间。
+    用于前端/API 传入的 scheduledAt 与调度器到期比较，统一在 UTC 下判断。
+    """
+    from datetime import timezone
+
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        s = str(value).strip()
+        if not s:
+            raise ValueError("定时时间为空")
+        s = s.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError as e:
+            raise ValueError(f"无法解析定时时间: {value!r}") from e
+    if dt.tzinfo is None:
+        # 无时区信息：视为服务器本地时间，附加本地时区
+        dt = dt.astimezone()
+    return dt.astimezone(timezone.utc)
+
+
+def scheduled_at_is_due(value) -> bool:
+    """判断定时时间是否已到期（<= 当前 UTC 时间）。"""
+    from datetime import timezone
+
+    try:
+        target = parse_scheduled_at(value)
+    except ValueError:
+        return False
+    return target <= datetime.now(timezone.utc)
+
+
+def assert_scheduled_at_is_future(value, *, grace_seconds: float = 5.0) -> str:
+    """校验定时时间必须晚于当前时间（允许极小时钟偏差）。
+
+    返回规范化后的 ISO UTC 字符串，便于落库一致。
+    """
+    from datetime import timezone, timedelta
+
+    target = parse_scheduled_at(value)
+    now = datetime.now(timezone.utc)
+    if target <= now - timedelta(seconds=max(0.0, grace_seconds)):
+        raise ValueError(
+            f"定时时间必须晚于当前时间（已过期: {target.isoformat()}）"
+        )
+    return target.isoformat().replace("+00:00", "Z")
 
 
 class WorkflowService(TaskControlMixin):
@@ -72,6 +127,12 @@ class WorkflowService(TaskControlMixin):
             os.environ.get("BLOG_WRITER_TASK_MEMORY_TTL_SECONDS", "300") or 300
         )
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+        # 定时任务调度器（scheduled tasks）
+        self._scheduler_task: Optional[asyncio.Task] = None
+        self._scheduler_running = False
+        self._scheduler_interval_seconds = float(
+            os.environ.get("BLOG_WRITER_SCHEDULER_INTERVAL_SECONDS", "15") or 15
+        )
         # 防止同一 task 并发执行多个编排协程
         self._running_tasks: set = set()
         self._running_tasks_lock = threading.Lock()
@@ -205,7 +266,19 @@ class WorkflowService(TaskControlMixin):
                 return False
         
         # 状态值检查
-        valid_statuses = {'pending', 'running', 'paused', 'completed', 'failed', 'cancelled', 'waiting_review', 'rejected', 'completed_partial'}
+        valid_statuses = {
+            'pending',
+            'running',
+            'queued',  # 并发排队 / 定时到期后启动前的中间态，必须可落库与恢复
+            'paused',
+            'completed',
+            'failed',
+            'cancelled',
+            'waiting_review',
+            'rejected',
+            'completed_partial',
+            'scheduled',
+        }
         if state['status'] not in valid_statuses:
             logger.warning(f"状态值无效: {state['status']}, 有效值: {valid_statuses}")
             return False
@@ -580,6 +653,190 @@ class WorkflowService(TaskControlMixin):
                 return True
         return False
 
+    # ============ 定时任务调度器 ============
+    def start_scheduler(self) -> None:
+        """启动定时任务调度器（幂等）。须在 event loop 中调用。"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._scheduler_running:
+            return
+        self._scheduler_running = True
+        self._main_loop = loop
+        self._scheduler_task = loop.create_task(self._schedule_loop())
+        logger.info(
+            "定时任务调度器已启动（间隔 %.0fs）", self._scheduler_interval_seconds
+        )
+
+    def stop_scheduler(self) -> None:
+        """停止调度器循环。"""
+        self._scheduler_running = False
+        if self._scheduler_task is not None:
+            self._scheduler_task.cancel()
+            self._scheduler_task = None
+
+    async def _schedule_loop(self) -> None:
+        """调度器主循环：周期性扫描到期的 scheduled 任务并触发启动。"""
+        # 启动时先立即清扫一次（处理服务器重启后遗留的到期任务）
+        try:
+            await self._dispatch_due_scheduled_tasks()
+        except Exception as e:
+            logger.warning("定时任务初始清扫失败: %s", e)
+        while self._scheduler_running:
+            await asyncio.sleep(self._scheduler_interval_seconds)
+            try:
+                await self._dispatch_due_scheduled_tasks()
+            except Exception as e:
+                logger.warning("定时任务清扫失败: %s", e)
+
+    async def _dispatch_due_scheduled_tasks(self) -> None:
+        """扫描内存与 DB 中到期的 scheduled 任务，并触发启动。"""
+        due_ids: List[str] = []
+
+        # 1. 内存中的 scheduled 任务
+        for tid, t in list(self._tasks.items()):
+            extra = t.get("extra") or {}
+            sat = extra.get("scheduled_at")
+            if t.get("status") == "scheduled" and sat and scheduled_at_is_due(sat):
+                due_ids.append(tid)
+
+        # 2. DB 中的 scheduled 任务（服务器重启后内存未加载）
+        if self._use_db:
+            try:
+                for db_task in self._task_repo.list_tasks(status="scheduled", limit=1000):
+                    tid = db_task.get("task_id", "")
+                    if not tid or tid in due_ids:
+                        continue
+                    extra = db_task.get("extra") or {}
+                    sat = extra.get("scheduled_at")
+                    if sat and scheduled_at_is_due(sat):
+                        self._hydrate_review_fields(db_task)
+                        if tid not in self._tasks:
+                            self._tasks[tid] = db_task
+                            self._task_logs.setdefault(tid, [])
+                        due_ids.append(tid)
+            except Exception as e:
+                logger.warning("扫描 DB 定时任务失败: %s", e)
+
+        # 3. 触发启动
+        for tid in due_ids:
+            try:
+                self._launch_scheduled_task(tid)
+            except Exception as e:
+                logger.error("触发定时任务 %s 失败: %s", tid, e)
+
+    def _launch_scheduled_task(self, task_id: str) -> None:
+        """将到期的 scheduled 任务转为排队执行（fire-and-forget）。"""
+        task = self._tasks.get(task_id) or self._ensure_task_loaded(task_id)
+        if not task:
+            return
+        if task.get("status") == "cancelled":
+            return
+        extra = dict(task.get("extra") or {})
+
+        # 标记为 queued，避免 start_workflow 复用 scheduled 状态导致进度异常
+        if task.get("status") == "scheduled":
+            task["status"] = "queued"
+            self._save_state(task_id)
+
+        params = extra.get("scheduled_params")
+        if not isinstance(params, dict) or not params.get("keywords"):
+            params = self._rebuild_start_params(task_id, task)
+        if not params or not params.get("keywords"):
+            self._mark_scheduled_failed(task_id, "缺少启动参数，无法定时启动")
+            return
+        params["task_id"] = task_id
+        params.pop("resume_from", None)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        coro = self.start_workflow(**params)
+        t = loop.create_task(coro)
+        _scheduled_futures.add(t)
+        t.add_done_callback(_scheduled_futures.discard)
+        logger.info("定时任务 %s 已到期，触发启动", task_id)
+
+    def _rebuild_start_params(self, task_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+        """从任务自身字段重建 start_workflow 参数（旧数据兜底）。"""
+        from pathlib import Path as _Path
+        extra = task.get("extra") or {}
+        # 兜底路径存的是相对路径（./brands/...），start_workflow 期望绝对路径，
+        # 与 scheduled_params（API 层已 resolve）保持语义一致，避免实例目录下找不到品牌。
+        brand_path = task.get("brand_path", "") or ""
+        if brand_path:
+            p = _Path(brand_path)
+            if not p.is_absolute():
+                project_root = self.instance_root.resolve().parent.parent
+                brand_path = str((project_root / p).resolve())
+        return {
+            "brand_path": brand_path,
+            "keywords": task.get("keywords", ""),
+            "user_note": task.get("user_note", ""),
+            "mode": task.get("mode", "auto"),
+            "brand_site_url": task.get("brand_site_url", ""),
+            "forbidden_whitelist": extra.get("forbidden_whitelist")
+            or task.get("forbidden_whitelist")
+            or [],
+            "step_files": task.get("step_files") or None,
+            "task_id": task_id,
+            "model": extra.get("model", "default"),
+            "temperature": extra.get("temperature"),
+            "max_tokens": extra.get("max_tokens"),
+            "priority": extra.get("priority", 2),
+            "skip_visual_check": extra.get("skip_visual_check", False),
+            "visual_mode": extra.get("visual_mode", "relaxed"),
+        }
+
+    def _mark_scheduled_failed(self, task_id: str, msg: str) -> None:
+        """将无法启动的定时任务标记为失败。"""
+        try:
+            task = self._ensure_task_loaded(task_id)
+            if not task:
+                return
+            if task.get("status") in ("completed", "failed", "cancelled", "rejected", "completed_partial"):
+                return
+            task["status"] = "failed"
+            task["end_time"] = datetime.now().isoformat()
+            extra = dict(task.get("extra") or {})
+            extra["last_error"] = str(msg)[:500]
+            task["extra"] = extra
+            self._save_state(task_id)
+        except Exception as e:
+            logger.error("标记定时任务失败 %s 出错: %s", task_id, e)
+
+    def list_scheduled_tasks(self) -> List[Dict[str, Any]]:
+        """列出所有 scheduled 任务（含 DB）。"""
+        result: List[Dict[str, Any]] = []
+        seen: set = set()
+        for tid, t in self._tasks.items():
+            if t.get("status") == "scheduled":
+                seen.add(tid)
+                result.append(self._scheduled_summary(tid, t))
+        if self._use_db:
+            try:
+                for db_task in self._task_repo.list_tasks(status="scheduled", limit=1000):
+                    tid = db_task.get("task_id", "")
+                    if tid and tid not in seen:
+                        seen.add(tid)
+                        result.append(self._scheduled_summary(tid, db_task))
+            except Exception:
+                pass
+        return result
+
+    @staticmethod
+    def _scheduled_summary(task_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+        extra = task.get("extra") or {}
+        return {
+            "task_id": task_id,
+            "status": "scheduled",
+            "keywords": task.get("keywords", ""),
+            "scheduled_at": extra.get("scheduled_at", ""),
+            "created_at": task.get("start_time", ""),
+        }
+
     def set_task_priority(self, task_id: str, priority: int) -> bool:
         """修改排队任务的优先级（1=低, 2=中, 3=高）。"""
         priority = max(1, min(3, priority))
@@ -939,6 +1196,10 @@ class WorkflowService(TaskControlMixin):
         model: str = "default",
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        scheduled_at: Optional[str] = None,
+        priority: int = 2,
+        skip_visual_check: bool = False,
+        visual_mode: str = "relaxed",
     ) -> None:
         """同步预注册任务，避免后台协程启动前 GET /tasks/{task_id} 返回 404。
 
@@ -980,10 +1241,16 @@ class WorkflowService(TaskControlMixin):
             extra["temperature"] = temperature
         if max_tokens is not None:
             extra["max_tokens"] = max_tokens
+        if scheduled_at:
+            extra["scheduled_at"] = scheduled_at
+        # 统一写入启动配置，_rebuild_start_params / rerun_from_node 等路径从 extra 读取
+        extra["priority"] = priority
+        extra["skip_visual_check"] = skip_visual_check
+        extra["visual_mode"] = visual_mode or "relaxed"
 
         self._tasks[task_id] = {
             "task_id": task_id,
-            "status": "running",
+            "status": "scheduled" if scheduled_at else "running",
             "mode": mode,
             "current_step": 0,
             "total_steps": len(step_files),
@@ -1046,6 +1313,8 @@ class WorkflowService(TaskControlMixin):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         priority: int = 2,
+        skip_visual_check: bool = False,
+        visual_mode: str = "relaxed",
     ) -> Dict[str, Any]:
         """启动工作流
         
@@ -1064,6 +1333,7 @@ class WorkflowService(TaskControlMixin):
             temperature: 单次任务温度覆盖
             max_tokens: 单次任务 max_tokens 覆盖
             priority: 任务优先级 (1=低, 2=中, 3=高)，排队时高优先级先执行
+            visual_mode: 视觉校验模式 ("relaxed"|"strict"|"placeholder")
         """
         try:
             self._main_loop = asyncio.get_running_loop()
@@ -1119,6 +1389,8 @@ class WorkflowService(TaskControlMixin):
             if max_tokens is not None:
                 extra["max_tokens"] = max_tokens
             extra["priority"] = priority
+            extra["skip_visual_check"] = skip_visual_check
+            extra["visual_mode"] = visual_mode
             self._tasks[task_id] = {
                 "task_id": task_id,
                 "status": "queued",
@@ -1183,15 +1455,19 @@ class WorkflowService(TaskControlMixin):
             "forbidden_whitelist_csv": ",".join(whitelist),
             "mode": mode,
             "task_id": task_id,
-            "instance_dir": str(instance_dir)
+            "instance_dir": str(instance_dir),
+            "skip_visual_check": skip_visual_check,
+            "skip_visual_flag": " --skip-visual" if skip_visual_check else "",
+            "visual_mode": visual_mode,
+            "strict_flag": " --strict" if visual_mode == "strict" else "",
         }
-        
+
         if step_files is None:
             registry = self.load_registry()
             step_files = registry.get("step_order", [])
         else:
             step_files = self.normalize_step_files(step_files)
-        
+
         self._tasks[task_id]["step_files"] = step_files
         self._tasks[task_id]["total_steps"] = len(step_files)
         
@@ -2051,6 +2327,8 @@ class WorkflowService(TaskControlMixin):
         mode: str = "auto",
         user_note: str = "",
         brand_site_url: str = "",
+        skip_visual_check: bool = False,
+        visual_mode: str = "relaxed",
         log_callback: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
         """从指定节点重新运行（忽略之前的结果）"""
@@ -2141,7 +2419,11 @@ class WorkflowService(TaskControlMixin):
             "forbidden_whitelist_csv": ",".join(whitelist),
             "mode": mode,
             "task_id": task_id,
-            "instance_dir": str(instance_dir)
+            "instance_dir": str(instance_dir),
+            "skip_visual_check": skip_visual_check,
+            "skip_visual_flag": " --skip-visual" if skip_visual_check else "",
+            "visual_mode": visual_mode,
+            "strict_flag": " --strict" if visual_mode == "strict" else "",
         }
         
         self._tasks[task_id] = state

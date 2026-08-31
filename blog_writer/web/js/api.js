@@ -81,6 +81,11 @@ const Api = {
                 const msg = (json && json.message) || '登录已过期，请重新登录';
                 throw new Error(msg);
             }
+            if (response.status === 429) {
+                const retry = response.headers.get('Retry-After') || '60';
+                const msg = (json && json.message) || `请求过于频繁，请 ${retry}s 后重试`;
+                throw new Error(msg);
+            }
             if (response.status === 503) {
                 throw new Error((json && json.message) || '服务暂不可用');
             }

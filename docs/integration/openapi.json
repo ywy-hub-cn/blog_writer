@@ -5519,6 +5519,19 @@
             ],
             "title": "Callbackevents",
             "description": "订阅的 Webhook 事件列表"
+          },
+          "scheduledAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduledat",
+            "description": "定时启动时间（ISO 8601，须晚于当前时间）。传入后任务先进入 status=scheduled，由服务器调度器到期后自动启动；浏览器可关闭，但 blog-writer 进程须保持运行。批量 /batch 暂不支持此字段。"
           }
         },
         "type": "object",

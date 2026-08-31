@@ -101,10 +101,9 @@ Usually under one second for major corridors.
     assert "twitter:card" in doc
     assert 'data-seq="cover"' in doc
     assert doc.count('data-seq="mermaid-') == 2
-    assert 'src="visual-cover.png"' in doc
-    assert (tmp_path / "visual-cover.png").read_bytes().startswith(b"\x89PNG")
-    assert (tmp_path / "visual-section-1.png").exists()
-    assert (tmp_path / "visual-section-2.png").exists()
+    assert 'src="visual-cover.svg"' in doc
+    assert (tmp_path / "visual-cover.svg").exists()
+    assert (tmp_path / "visual-cover.svg").read_text(encoding="utf-8")[:5].strip() == "<svg"
     assert "cdn.jsdelivr.net/npm/mermaid@11" in doc
 
 

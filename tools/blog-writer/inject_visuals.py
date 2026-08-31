@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministically guarantee a cover visual and three inline diagrams."""
+"""Deterministically guarantee a cover visual and inline diagrams using Mermaid."""
 from __future__ import annotations
 
 import argparse
@@ -7,13 +7,11 @@ import hashlib
 import html
 import json
 import re
-import struct
 import sys
 import urllib.parse
 import urllib.request
-import zlib
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 MERMAID_HEAD = """
@@ -27,44 +25,62 @@ mermaid.initialize({startOnLoad:true,theme:"neutral",flowchart:{useMaxWidth:true
 </script>
 """.strip()
 
-FONT_5X7 = {
-    "A": "01110/10001/10001/11111/10001/10001/10001",
-    "B": "11110/10001/10001/11110/10001/10001/11110",
-    "C": "01111/10000/10000/10000/10000/10000/01111",
-    "D": "11110/10001/10001/10001/10001/10001/11110",
-    "E": "11111/10000/10000/11110/10000/10000/11111",
-    "F": "11111/10000/10000/11110/10000/10000/10000",
-    "G": "01111/10000/10000/10111/10001/10001/01111",
-    "H": "10001/10001/10001/11111/10001/10001/10001",
-    "I": "11111/00100/00100/00100/00100/00100/11111",
-    "J": "00111/00010/00010/00010/10010/10010/01100",
-    "K": "10001/10010/10100/11000/10100/10010/10001",
-    "L": "10000/10000/10000/10000/10000/10000/11111",
-    "M": "10001/11011/10101/10101/10001/10001/10001",
-    "N": "10001/11001/10101/10011/10001/10001/10001",
-    "O": "01110/10001/10001/10001/10001/10001/01110",
-    "P": "11110/10001/10001/11110/10000/10000/10000",
-    "Q": "01110/10001/10001/10001/10101/10010/01101",
-    "R": "11110/10001/10001/11110/10100/10010/10001",
-    "S": "01111/10000/10000/01110/00001/00001/11110",
-    "T": "11111/00100/00100/00100/00100/00100/00100",
-    "U": "10001/10001/10001/10001/10001/10001/01110",
-    "V": "10001/10001/10001/10001/10001/01010/00100",
-    "W": "10001/10001/10001/10101/10101/11011/10001",
-    "X": "10001/10001/01010/00100/01010/10001/10001",
-    "Y": "10001/10001/01010/00100/00100/00100/00100",
-    "Z": "11111/00001/00010/00100/01000/10000/11111",
-    "0": "01110/10001/10011/10101/11001/10001/01110",
-    "1": "00100/01100/00100/00100/00100/00100/01110",
-    "2": "01110/10001/00001/00010/00100/01000/11111",
-    "3": "11110/00001/00001/01110/00001/00001/11110",
-    "4": "00010/00110/01010/10010/11111/00010/00010",
-    "5": "11111/10000/10000/11110/00001/00001/11110",
-    "6": "01110/10000/10000/11110/10001/10001/01110",
-    "7": "11111/00001/00010/00100/01000/01000/01000",
-    "8": "01110/10001/10001/01110/10001/10001/01110",
-    "9": "01110/10001/10001/01111/00001/00001/01110",
-}
+PALETTES = [
+    {
+        "name": "sms-green",
+        "bg_start": (19, 32, 25),
+        "bg_end": (54, 87, 62),
+        "accent": (191, 214, 193),
+        "muted": (139, 174, 145),
+        "title": (246, 250, 246),
+        "deco": (93, 118, 95),
+    },
+    {
+        "name": "sms-blue",
+        "bg_start": (18, 28, 48),
+        "bg_end": (42, 72, 120),
+        "accent": (158, 198, 255),
+        "muted": (110, 145, 198),
+        "title": (246, 248, 255),
+        "deco": (63, 93, 142),
+    },
+    {
+        "name": "sms-purple",
+        "bg_start": (36, 22, 44),
+        "bg_end": (88, 48, 102),
+        "accent": (230, 180, 255),
+        "muted": (170, 120, 188),
+        "title": (250, 246, 255),
+        "deco": (118, 65, 142),
+    },
+    {
+        "name": "sms-orange",
+        "bg_start": (40, 28, 18),
+        "bg_end": (110, 72, 38),
+        "accent": (255, 210, 150),
+        "muted": (188, 140, 90),
+        "title": (255, 250, 244),
+        "deco": (135, 95, 55),
+    },
+    {
+        "name": "sms-teal",
+        "bg_start": (16, 36, 36),
+        "bg_end": (38, 92, 92),
+        "accent": (150, 230, 220),
+        "muted": (96, 160, 154),
+        "title": (244, 252, 251),
+        "deco": (58, 108, 108),
+    },
+    {
+        "name": "sms-red",
+        "bg_start": (44, 18, 22),
+        "bg_end": (120, 42, 52),
+        "accent": (255, 170, 170),
+        "muted": (190, 110, 118),
+        "title": (255, 246, 247),
+        "deco": (155, 60, 75),
+    },
+]
 
 
 def _title(document: str) -> str:
@@ -86,6 +102,17 @@ def _keyword(out_dir: Path, fallback: str) -> str:
         ).strip()
     except (OSError, json.JSONDecodeError, TypeError):
         return fallback
+
+
+def _extract_h2_headings(document: str) -> List[str]:
+    """Extract H2 headings from the document."""
+    headings = []
+    for match in re.finditer(r"<h2[^>]*>([\s\S]*?)</h2>", document, re.I):
+        text = re.sub(r"<[^>]+>", " ", match.group(1))
+        text = html.unescape(re.sub(r"\s+", " ", text)).strip()
+        if text:
+            headings.append(text)
+    return headings
 
 
 def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
@@ -179,213 +206,258 @@ def _search_media_cover(site_url: str, keyword: str, title: str) -> str:
     return ""
 
 
-def _png_chunk(kind: bytes, data: bytes) -> bytes:
-    return (
-        struct.pack(">I", len(data))
-        + kind
-        + data
-        + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-    )
+def _variant_for(label: str, salt: str = "") -> int:
+    digest = hashlib.sha256(f"{label}:{salt}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % 6
 
 
-def _write_visual_png(
-    path: Path,
-    width: int,
-    height: int,
-    variant: int,
-    label: str,
+def _generate_cover_svg(
+    title: str,
+    keyword: str,
+    output_path: Path,
+    palette_index: int,
 ) -> None:
-    """Write a dependency-free, labelled, topic-specific infographic PNG."""
-    pixels = bytearray(width * height * 3)
+    """Generate a high-quality SVG cover image with gradient + title."""
+    p = PALETTES[palette_index % len(PALETTES)]
+    w, h = 1200, 630
 
-    def set_pixel(x: int, y: int, color: tuple[int, int, int]) -> None:
-        if 0 <= x < width and 0 <= y < height:
-            offset = (y * width + x) * 3
-            pixels[offset : offset + 3] = bytes(color)
+    def rgb(c):
+        return f"rgb({c[0]},{c[1]},{c[2]})"
 
-    def rect(
-        x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int]
-    ) -> None:
-        for y in range(max(0, y0), min(height, y1)):
-            for x in range(max(0, x0), min(width, x1)):
-                set_pixel(x, y, color)
+    bg_id = f"bg_{palette_index}"
+    deco_id = f"deco_{palette_index}"
 
-    def text_width(text: str, scale: int) -> int:
-        return max(0, len(text) * 6 * scale - scale)
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">
+  <defs>
+    <linearGradient id="{bg_id}" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="{rgb(p['bg_start'])}"/>
+      <stop offset="100%" stop-color="{rgb(p['bg_end'])}"/>
+    </linearGradient>
+    <linearGradient id="{deco_id}" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="{rgb(p['accent'])}" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="{rgb(p['accent'])}" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow_{palette_index}" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="{rgb(p['accent'])}" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="{rgb(p['accent'])}" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="{w}" height="{h}" fill="url(#{bg_id})"/>
+  <circle cx="850" cy="200" r="350" fill="url(#glow_{palette_index})"/>
+  <rect x="0" y="{h-180}" width="{w}" height="3" fill="url(#{deco_id})"/>
+'''
 
-    def draw_text(
-        text: str,
-        x: int,
-        y: int,
-        scale: int,
-        color: tuple[int, int, int],
-        centered: bool = False,
-    ) -> None:
-        value = re.sub(r"[^A-Z0-9 ]+", "", text.upper())
-        if centered:
-            x -= text_width(value, scale) // 2
-        cursor = x
-        for char in value:
-            if char == " ":
-                cursor += 6 * scale
-                continue
-            glyph = FONT_5X7.get(char)
-            if glyph:
-                for row_index, row in enumerate(glyph.split("/")):
-                    for col_index, bit in enumerate(row):
-                        if bit == "1":
-                            rect(
-                                cursor + col_index * scale,
-                                y + row_index * scale,
-                                cursor + (col_index + 1) * scale,
-                                y + (row_index + 1) * scale,
-                                color,
-                            )
-            cursor += 6 * scale
-
-    # Branded green gradient background.
-    for y in range(height):
-        ratio = y / max(1, height - 1)
-        color = (19 + int(35 * ratio), 32 + int(55 * ratio), 25 + int(37 * ratio))
-        row = bytes(color) * width
-        offset = y * width * 3
-        pixels[offset : offset + width * 3] = row
-
-    def line(x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int]) -> None:
-        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
-        for step in range(steps + 1):
-            x = round(x0 + (x1 - x0) * step / steps)
-            y = round(y0 + (y1 - y0) * step / steps)
-            for delta in range(-2, 3):
-                set_pixel(x + delta, y, color)
-                set_pixel(x, y + delta, color)
-
-    def circle(cx: int, cy: int, radius: int, color: tuple[int, int, int]) -> None:
-        r2 = radius * radius
-        inner = max(0, radius - 7) ** 2
-        for y in range(cy - radius, cy + radius + 1):
-            for x in range(cx - radius, cx + radius + 1):
-                dist = (x - cx) ** 2 + (y - cy) ** 2
-                if inner <= dist <= r2:
-                    set_pixel(x, y, color)
-
-    accent = (191, 214, 193)
-    white = (246, 250, 246)
-    muted = (139, 174, 145)
-    title = re.sub(r"\s+", " ", label).strip().upper()
-    words = title.split()
-    title_line = " ".join(words[: min(6, len(words))])[:42]
-    draw_text(title_line, width // 2, 34, 5 if width >= 1100 else 4, white, True)
-
-    if variant == 0:
-        # Cover: phone + OTP code + protected delivery path.
-        rect(width // 10, 150, width // 10 + 210, height - 80, (28, 57, 39))
-        rect(width // 10 + 18, 170, width // 10 + 192, height - 120, (238, 245, 238))
-        draw_text("OTP", width // 10 + 105, 230, 7, (42, 92, 55), True)
-        draw_text("482931", width // 10 + 105, 315, 5, (19, 32, 25), True)
-        nodes = [
-            (width // 2 - 80, height // 2),
-            (width // 2 + 100, height // 2 - 80),
-            (width * 4 // 5, height // 2 + 40),
-        ]
-        for first, second in zip(nodes, nodes[1:]):
-            line(*first, *second, accent)
-        for point, name in zip(nodes, ("API", "ROUTE", "PHONE")):
-            circle(*point, 42, accent)
-            draw_text(name, point[0], point[1] + 64, 3, white, True)
-        draw_text("SECURE SMS DELIVERY", width * 2 // 3, height - 80, 4, muted, True)
-    elif variant == 1:
-        # Failure diagnosis chain.
-        names = ("APP", "API", "ROUTE", "CARRIER", "DEVICE")
-        xs = [width * (i + 1) // 6 for i in range(5)]
-        y = height // 2
-        for x0, x1 in zip(xs, xs[1:]):
-            line(x0 + 34, y, x1 - 34, y, accent)
-        for x, name in zip(xs, names):
-            circle(x, y, 34, accent)
-            draw_text(name, x, y + 58, 3, white, True)
-        draw_text("TRACE EVERY HOP", width // 2, height - 48, 4, muted, True)
-    elif variant == 2:
-        # End-to-end OTP sequence with descending steps.
-        steps = (("1", "GENERATE"), ("2", "SEND"), ("3", "DELIVER"), ("4", "VERIFY"))
-        for index, (number, name) in enumerate(steps):
-            x = width // 5 + index * width // 5
-            y = 145 + (index % 2) * 105
-            if index:
-                prev_x = width // 5 + (index - 1) * width // 5
-                prev_y = 145 + ((index - 1) % 2) * 105
-                line(prev_x + 32, prev_y, x - 32, y, accent)
-            circle(x, y, 32, accent)
-            draw_text(number, x, y - 11, 3, white, True)
-            draw_text(name, x, y + 54, 3, white, True)
-        draw_text("EXPIRY AND RETRY CONTROL", width // 2, height - 48, 4, muted, True)
+    # Decorative geometric elements
+    shape_type = _variant_for(title, "cover_shape")
+    if shape_type == 0:
+        # Circles cluster
+        svg += f'''  <circle cx="1050" cy="120" r="80" fill="{rgb(p['accent'])}" fill-opacity="0.15"/>
+  <circle cx="1080" cy="160" r="50" fill="{rgb(p['accent'])}" fill-opacity="0.1"/>
+  <circle cx="950" cy="100" r="30" fill="{rgb(p['title'])}" fill-opacity="0.2"/>
+'''
+    elif shape_type == 1:
+        # Triangles
+        svg += f'''  <polygon points="1000,80 1100,180 900,180" fill="{rgb(p['accent'])}" fill-opacity="0.12"/>
+  <polygon points="1050,40 1120,140 980,140" fill="{rgb(p['muted'])}" fill-opacity="0.1"/>
+'''
+    elif shape_type == 2:
+        # Rectangles / bars
+        svg += f'''  <rect x="900" y="60" width="15" height="150" fill="{rgb(p['accent'])}" fill-opacity="0.15"/>
+  <rect x="930" y="40" width="15" height="170" fill="{rgb(p['accent'])}" fill-opacity="0.1"/>
+  <rect x="960" y="80" width="15" height="130" fill="{rgb(p['muted'])}" fill-opacity="0.12"/>
+'''
+    elif shape_type == 3:
+        # Wave / arc
+        svg += f'''  <path d="M 800 550 Q 900 450 1000 500 T 1200 480" stroke="{rgb(p['accent'])}" stroke-width="2" fill="none" fill-opacity="0.2"/>
+  <path d="M 800 570 Q 900 470 1000 520 T 1200 500" stroke="{rgb(p['muted'])}" stroke-width="1.5" fill="none" fill-opacity="0.15"/>
+'''
+    elif shape_type == 4:
+        # Dots / grid
+        dot_rows, dot_cols = 4, 8
+        dots = []
+        for r in range(dot_rows):
+            for c in range(dot_cols):
+                cx = 880 + c * 40
+                cy = 80 + r * 40
+                dots.append(f'<circle cx="{cx}" cy="{cy}" r="4" fill="{rgb(p["accent"])}" fill-opacity="{0.15 + (r*dot_cols+c)*0.02}"/>')
+        svg += "  " + "\n  ".join(dots) + "\n"
     else:
-        # Security boundary: risks on one side, controls on the other.
-        center = (width // 2, height // 2)
-        circle(*center, 58, accent)
-        draw_text("OTP", center[0], center[1] - 11, 3, white, True)
-        branches = [
-            ((width // 5, 140), "SS7", (184, 110, 104)),
-            ((width // 5, height - 110), "SIM SWAP", (184, 110, 104)),
-            ((width * 4 // 5, 140), "RATE LIMIT", muted),
-            ((width * 4 // 5, height - 110), "RISK CHECK", muted),
-        ]
-        for point, name, color in branches:
-            line(*center, *point, color)
-            circle(*point, 30, color)
-            draw_text(name, point[0], point[1] + 48, 3, white, True)
-        draw_text("BALANCE REACH AND RISK", width // 2, height - 38, 4, muted, True)
+        # Diagonal lines
+        svg += f'''  <line x1="800" y1="0" x2="1200" y2="400" stroke="{rgb(p['accent'])}" stroke-width="1" stroke-opacity="0.1"/>
+  <line x1="850" y1="0" x2="1200" y2="350" stroke="{rgb(p['muted'])}" stroke-width="1" stroke-opacity="0.08"/>
+  <line x1="900" y1="0" x2="1200" y2="300" stroke="{rgb(p['accent'])}" stroke-width="1" stroke-opacity="0.06"/>
+'''
 
-    raw = b"".join(
-        b"\x00" + bytes(pixels[y * width * 3 : (y + 1) * width * 3])
-        for y in range(height)
-    )
-    png = (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + _png_chunk(b"IDAT", zlib.compress(raw, 9))
-        + _png_chunk(b"IEND", b"")
-    )
-    path.write_bytes(png)
+    # Title text
+    display_title = title[:90] if len(title) > 90 else title
+    title_lines = _wrap_text(display_title, max_chars=28)
+    line_height = 68
+    start_y = 280 - (len(title_lines) * line_height) // 2
+    for i, line in enumerate(title_lines):
+        svg += f'  <text x="80" y="{start_y + i * line_height}" font-family="Georgia, Times New Roman, serif" font-size="52" font-weight="600" fill="{rgb(p["title"])}">{html.escape(line)}</text>\n'
+
+    # Keyword/tagline
+    if keyword:
+        kw_display = keyword[:50]
+        svg += f'  <text x="80" y="{start_y + len(title_lines) * line_height + 60}" font-family="Georgia, Times New Roman, serif" font-size="24" fill="{rgb(p["accent"])}" fill-opacity="0.85">{html.escape(kw_display)}</text>\n'
+
+    svg += "</svg>"
+    output_path.write_text(svg, encoding="utf-8")
 
 
-def _cover_figure(title: str, src: str) -> str:
-    alt = html.escape(f"Visual overview for {title}", quote=True)
-    return (
-        '<figure class="article-cover" data-field="image" data-seq="cover" '
-        'itemprop="image" itemscope itemtype="https://schema.org/ImageObject">'
-        f'<img src="{src}" alt="{alt}" itemprop="contentUrl" loading="eager" '
-        'style="width:100%;display:block;border-radius:18px;">'
-        f'<figcaption itemprop="caption">{alt}</figcaption></figure>'
-    )
+def _wrap_text(text: str, max_chars: int = 28) -> List[str]:
+    """Simple word-wrap for SVG text."""
+    words = text.split()
+    if not words:
+        return [""]
+    lines = []
+    current = ""
+    for word in words:
+        if current and len(current) + 1 + len(word) > max_chars:
+            lines.append(current)
+            current = word
+        else:
+            current = f"{current} {word}".strip()
+    if current:
+        lines.append(current)
+    return lines or [""]
 
 
-def _diagram(index: int, heading: str, src: str) -> str:
-    label = re.sub(r"[^A-Za-z0-9 ]+", "", html.unescape(heading))
-    label = re.sub(r"\s+", " ", label).strip()[:48] or f"Topic {index}"
+# Mermaid flowchart node with left-aligned text content (HTML labels)
+TEXT_LEFT_ALIGN = '["<div style=\'text-align:left\'>Key Points<br/>• Core concept<br/>• Main idea<br/>• Important detail</div>"]'
+
+
+def _generate_mermaid_code(
+    heading: str,
+    keyword: str,
+    heading_index: int,
+    total_sections: int,
+    all_headings: List[str],
+) -> str:
+    """Generate Mermaid diagram code based on heading and article structure."""
+    label = _clean_for_mermaid(heading)
+    kw = _clean_for_mermaid(keyword) if keyword else "topic"
+
+    if heading_index == 0:
+        # Overview mindmap: show all sections
+        nodes = all_headings[:6]
+        mindmap = "mindmap\n"
+        mindmap += f"  root(({kw}))\n"
+        for node in nodes:
+            clean = _clean_for_mermaid(node)[:30]
+            mindmap += f"    {clean}\n"
+        return mindmap
+    elif heading_index == 1:
+        # Process flowchart for the first detailed section
+        clean = _clean_for_mermaid(heading)[:25]
+        flowchart = "flowchart TD\n"
+        flowchart += f'    A["{clean}"] --> B[Key Concepts]\n'
+        flowchart += f'    B --> C{TEXT_LEFT_ALIGN}\n'
+        flowchart += f'    C --> D[Implementation]\n'
+        flowchart += f'    D --> E[Best Practices]\n'
+        flowchart += f'    E --> F[Next Steps]\n'
+        return flowchart
+    else:
+        # Knowledge/flow diagram for subsequent sections
+        clean = _clean_for_mermaid(heading)[:25]
+        flowchart = "flowchart LR\n"
+        flowchart += f'    A["{clean}"] --> B[Overview]\n'
+        flowchart += f'    B --> C[Details]\n'
+        flowchart += f'    C --> D[Examples]\n'
+        return flowchart
+
+
+def _clean_for_mermaid(text: str) -> str:
+    """Clean text for safe use in Mermaid node labels."""
+    # Remove characters that cause Mermaid parse errors
+    cleaned = re.sub(r'[<>{}|\[\]]', '', text)
+    cleaned = re.sub(r'"', "'", cleaned)
+    cleaned = re.sub(r'\\\\n', ' ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # Limit length
+    if len(cleaned) > 50:
+        cleaned = cleaned[:48] + '…'
+    return cleaned or 'Topic'
+
+
+def _mermaid_figure(index: int, heading: str, keyword: str, diagram_code: str) -> str:
+    """Build a figure containing a Mermaid diagram block."""
+    label = _clean_for_mermaid(heading)
+    alt = html.escape(f"{label} concept diagram", quote=True)
+    caption = html.escape(f"{label} — key concepts and structure", quote=True)
     return (
         f'<figure class="visual-mermaid" data-field="visual" data-seq="mermaid-{index}" '
         'itemprop="image" itemscope itemtype="https://schema.org/ImageObject">\n'
-        f'<img src="{src}" alt="{html.escape(label, quote=True)} workflow diagram" '
-        'itemprop="contentUrl" loading="lazy">\n'
-        f'<figcaption itemprop="caption">{html.escape(label)} workflow</figcaption>\n'
+        f'<pre class="mermaid" itemprop="contentUrl">{html.escape(diagram_code)}</pre>\n'
+        f'<figcaption itemprop="caption">{caption}</figcaption>\n'
         "</figure>"
     )
+
+
+def _cover_figure(title: str, src: str, keyword: str) -> str:
+    """Build the cover figure element."""
+    alt = html.escape(f"{title} article cover overview", quote=True)
+    caption = html.escape(f"{title} — article overview and key themes", quote=True)
+    is_svg = src.endswith(".svg") or "visual-cover" in src
+    if is_svg:
+        # SVG covers use an <img> tag with proper dimensions
+        return (
+            '<figure class="article-cover" data-field="image" data-seq="cover" '
+            'itemprop="image" itemscope itemtype="https://schema.org/ImageObject">'
+            f'<img src="{src}" alt="{alt}" itemprop="contentUrl" loading="eager" '
+            'style="width:100%;display:block;border-radius:18px;">'
+            f'<figcaption itemprop="caption">{caption}</figcaption></figure>'
+        )
+    else:
+        return (
+            '<figure class="article-cover" data-field="image" data-seq="cover" '
+            'itemprop="image" itemscope itemtype="https://schema.org/ImageObject">'
+            f'<img src="{src}" alt="{alt}" itemprop="contentUrl" loading="eager" '
+            'style="width:100%;display:block;border-radius:18px;">'
+            f'<figcaption itemprop="caption">{caption}</figcaption></figure>'
+        )
+
+
+def _strip_visuals(document: str) -> str:
+    """Remove previously injected cover / inline visuals so we can re-inject cleanly."""
+    result = re.sub(
+        r'<figure\b[^>]*\bdata-seq=["\']cover["\'][^>]*>[\s\S]*?</figure>\s*',
+        "",
+        document,
+        flags=re.I,
+    )
+    result = re.sub(
+        r'<figure\b[^>]*\bdata-seq=["\']mermaid-\d+["\'][^>]*>[\s\S]*?</figure>\s*',
+        "",
+        result,
+        flags=re.I,
+    )
+    # Also strip old-style pixel image references
+    result = re.sub(
+        r'<figure\b[^>]*>\s*<img[^>]*src=["\'][^"\']*visual-(cover|section)[^"\']*["\'][^>]*>\s*</figure>\s*',
+        "",
+        result,
+        flags=re.I,
+    )
+    return result
 
 
 MIN_INLINE_VISUALS = 1
 TARGET_INLINE_VISUALS = 2
 
 
-def inject_visuals(document: str, image_sources: Optional[list[str]] = None) -> str:
+def inject_visuals(
+    document: str,
+    image_sources: Optional[List[str]] = None,
+    keyword: str = "",
+    headings: Optional[List[str]] = None,
+) -> str:
     """Add missing visuals without changing article text or section order."""
     result = document
     title = _title(result)
-    sources = image_sources or [
-        "visual-cover.png",
-        "visual-section-1.png",
-        "visual-section-2.png",
-    ]
+
+    if headings is None:
+        headings = _extract_h2_headings(result)
 
     if 'data-seq="cover"' not in result:
         content = re.search(
@@ -395,10 +467,11 @@ def inject_visuals(document: str, image_sources: Optional[list[str]] = None) -> 
         )
         if not content:
             raise ValueError("缺少 blog-content 容器，无法注入封面图")
+        cover_src = image_sources[0] if image_sources and image_sources[0] else "visual-cover.svg"
         result = (
             result[: content.end()]
             + "\n"
-            + _cover_figure(title, sources[0])
+            + _cover_figure(title, cover_src, keyword)
             + result[content.end() :]
         )
 
@@ -411,15 +484,33 @@ def inject_visuals(document: str, image_sources: Optional[list[str]] = None) -> 
         )
         sections = list(section_pattern.finditer(result))
         if len(sections) < MIN_INLINE_VISUALS:
-            raise ValueError(
-                f"可注入图表的 H2 区块不足 {MIN_INLINE_VISUALS} 个（实际 {len(sections)}）"
+            # If not enough <section> blocks, inject after the first H2 directly
+            h2_pattern = re.compile(
+                r'(<h2[^>]*>([\s\S]*?)</h2>)',
+                re.I,
             )
-        # Prefer the first two distinct H2 sections; avoid stacking three similar diagrams.
+            h2_matches = list(h2_pattern.finditer(result))
+            if len(h2_matches) >= MIN_INLINE_VISUALS:
+                sections = h2_matches
+
+        if len(sections) < MIN_INLINE_VISUALS:
+            raise ValueError(
+                f"可注入图表的区块不足 {MIN_INLINE_VISUALS} 个（实际 {len(sections)}）"
+            )
+
         additions = []
-        for index, match in enumerate(sections[:needed], start=existing + 1):
-            heading = re.sub(r"<[^>]+>", " ", match.group(2))
-            source = sources[min(index, len(sources) - 1)]
-            additions.append((match.end(), "\n" + _diagram(index, heading, source)))
+        for idx, match in enumerate(sections[:needed], start=existing + 1):
+            if isinstance(match, re.Match):
+                heading_text = re.sub(r"<[^>]+>", " ", match.group(match.lastindex or 2))
+                heading_text = html.unescape(re.sub(r"\s+", " ", heading_text)).strip()
+            else:
+                heading_text = f"Section {idx}"
+            diagram_code = _generate_mermaid_code(
+                heading_text, keyword, idx - 1, len(sections), headings
+            )
+            additions.append(
+                (match.end(), "\n" + _mermaid_figure(idx, heading_text, keyword, diagram_code))
+            )
         for offset, addition in reversed(additions):
             result = result[:offset] + addition + result[offset:]
 
@@ -437,54 +528,85 @@ def inject_visuals(document: str, image_sources: Optional[list[str]] = None) -> 
     return result
 
 
-def run(out_dir: Path, media_site_url: str = "") -> Path:
+def run(out_dir: Path, media_site_url: str = "", strict: bool = False) -> Path:
     target = out_dir / "006 呈现文档.html"
     if not target.exists():
         raise SystemExit(f"ERROR: 缺少 {target.name}")
     original = target.read_text(encoding="utf-8")
-    image_names = [
-        "visual-cover.png",
-        "visual-section-1.png",
-        "visual-section-2.png",
-    ]
-    sizes = [(1200, 630), (1000, 420), (1000, 420)]
+
     title = _title(original)
     keyword = _keyword(out_dir, title)
-    headings = [
-        html.unescape(re.sub(r"<[^>]+>", " ", item))
-        for item in re.findall(r"<h2[^>]*>([\s\S]*?)</h2>", original, re.I)
-    ]
-    labels = [title] + (headings[:2] + ["Workflow"] * 2)[:2]
-    for index, (name, (width, height)) in enumerate(zip(image_names, sizes)):
-        image_path = out_dir / name
-        _write_visual_png(image_path, width, height, index, labels[index])
+    headings = _extract_h2_headings(original)
+
+    # 1. Generate SVG cover image
+    palette_index = _variant_for(keyword or title, "palette")
+    cover_svg_path = out_dir / "visual-cover.svg"
+    _generate_cover_svg(title, keyword, cover_svg_path, palette_index)
+
+    # 2. Try WordPress cover, fall back to SVG
     cover_url = _search_media_cover(media_site_url, keyword, title)
-    image_sources = [cover_url or image_names[0], *image_names[1:]]
+    cover_src = cover_url or "visual-cover.svg"
+
+    image_sources = [cover_src]
+
+    # 3. Always strip old visuals before reinjecting (ensures fresh SVG/Mermaid)
+    original = _strip_visuals(original)
+    print("   [visual] stripped old visuals for fresh injection", file=sys.stderr)
+
     try:
-        updated = inject_visuals(original, image_sources)
+        updated = inject_visuals(original, image_sources, keyword=keyword, headings=headings)
     except ValueError as exc:
         raise SystemExit(f"ERROR: {exc}") from exc
 
     figures = updated.count("<figure")
     mermaids = len(re.findall(r'data-seq=["\']mermaid-\d+["\']', updated, re.I))
-    if figures < 1 or mermaids < MIN_INLINE_VISUALS:
-        raise SystemExit(f"ERROR: 视觉元素不足 figures={figures}, mermaids={mermaids}")
+    mermaid_blocks = len(re.findall(r'<pre class="mermaid"', updated, re.I))
+
+    if figures < 1:
+        raise SystemExit(f"ERROR: 视觉元素不足 figures={figures}（至少封面 1 个）")
+
     target.write_text(updated, encoding="utf-8")
-    print(f"OK: visuals injected figures={figures}, mermaids={mermaids}")
+
+    # 4. Validate (strict mode blocks, relaxed mode only warns)
+    import importlib.util
+
+    validator_path = Path(__file__).resolve().parent / "validate_visuals.py"
+    validator_spec = importlib.util.spec_from_file_location("validate_visuals", validator_path)
+    if validator_spec and validator_spec.loader:
+        validator = importlib.util.module_from_spec(validator_spec)
+        validator_spec.loader.exec_module(validator)
+        errors = validator.validate_visuals(out_dir, strict=strict)
+        if errors:
+            if strict:
+                raise SystemExit(
+                    f"ERROR: 视觉校验失败（严格模式）: {'; '.join(errors[:5])}"
+                )
+            print(f"   [visual] validation warnings (non-blocking): {'; '.join(errors[:3])}", file=sys.stderr)
+        else:
+            mode_label = "严格模式" if strict else "宽松模式"
+            print(f"   [visual] validation passed ({mode_label})", file=sys.stderr)
+
+    print(f"OK: visuals injected figures={figures}, mermaid_diagrams={mermaid_blocks}")
     return target
 
 
 def main(argv: Optional[list] = None) -> int:
-    parser = argparse.ArgumentParser(description="为 006 呈现文档注入确定性视觉元素")
+    parser = argparse.ArgumentParser(description="为 006 呈现文档注入高质量视觉元素（Mermaid 图表 + SVG 封面）")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--media-site-url", default="")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="严格模式：图片校验失败时 hard fail（默认宽松模式，仅警告）",
+    )
     args = parser.parse_args(argv)
     out_dir = Path(args.out_dir).resolve()
     if not out_dir.is_dir():
         print(f"ERROR: out-dir 不存在: {out_dir}", file=sys.stderr)
         return 1
     try:
-        run(out_dir, media_site_url=args.media_site_url)
+        run(out_dir, media_site_url=args.media_site_url, strict=args.strict)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 1

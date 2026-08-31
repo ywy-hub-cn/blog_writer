@@ -7,7 +7,7 @@ const Tasks = {
     _currentFileName: null,
     _detailPollTimer: null,
 
-    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens, priority, brandSiteUrl) {
+    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens, priority, brandSiteUrl, visualMode, scheduledAt) {
         if (!keywords) {
             UI.showToast('请输入关键词', 'warn');
             return;
@@ -22,6 +22,11 @@ const Tasks = {
         if (maxTokens !== undefined) UI.addLog(`   最大输出 Token: ${maxTokens}`, 'info');
         if (forbiddenWhitelist) UI.addLog(`   禁用词白名单: ${forbiddenWhitelist}`, 'info');
         if (brandSiteUrl) UI.addLog(`   品牌官网: ${brandSiteUrl}`, 'info');
+        if (scheduledAt) UI.addLog(`   ⏰ 定时启动: ${new Date(scheduledAt).toLocaleString()}`, 'warn');
+        const modeLabels = { relaxed: '宽松校验', strict: '严格校验', placeholder: '占位符模式' };
+        if (visualMode && visualMode !== 'relaxed') {
+            UI.addLog(`   🖼️ 图片校验模式: ${modeLabels[visualMode] || visualMode}`, 'warn');
+        }
 
         try {
             const payload = {
@@ -36,6 +41,8 @@ const Tasks = {
             if (maxTokens !== undefined) payload.max_tokens = maxTokens;
             if (forbiddenWhitelist && String(forbiddenWhitelist).trim()) payload.forbidden_whitelist = String(forbiddenWhitelist).trim();
             if (brandSiteUrl && String(brandSiteUrl).trim()) payload.brand_site_url = String(brandSiteUrl).trim();
+            if (visualMode && visualMode !== 'relaxed') payload.visual_mode = visualMode;
+            if (scheduledAt) payload.scheduled_at = scheduledAt;
             
             const result = await Api.post('/api/tasks/start', payload);
             
@@ -58,18 +65,30 @@ const Tasks = {
 
     poll(taskId) {
         let lastLogIndex = 0;
+        let scheduledLogged = false;
+        let backoffMs = 8000;
         const tick = async () => {
             try {
                 const task = await Api.get(`/api/tasks/${taskId}`);
                 const logs = await Api.get(`/api/tasks/${taskId}/logs`);
+                backoffMs = 8000;
                 
                 if (logs.logs && logs.logs.length > lastLogIndex) {
                     logs.logs.slice(lastLogIndex).forEach(l => UI.addLog(l));
                     lastLogIndex = logs.logs.length;
                 }
 
-                if (task.status === 'running' || task.status === 'waiting_review') {
-                    setTimeout(tick, 3000);
+                if (task.status === 'scheduled') {
+                    if (!scheduledLogged) {
+                        UI.addLog(`   ⏰ 任务已定时，将在指定时间由服务器自动执行`, 'info');
+                        scheduledLogged = true;
+                    }
+                    setTimeout(tick, 15000);
+                    return;
+                }
+
+                if (task.status === 'running' || task.status === 'waiting_review' || task.status === 'queued') {
+                    setTimeout(tick, backoffMs);
                 } else {
                     UI.addLog(`   📊 任务结束: ${UI.getStatusLabel(task.status)}`, 
                         task.status === 'completed' ? 'info' : 'warn');
@@ -78,9 +97,15 @@ const Tasks = {
                 }
             } catch (e) {
                 console.error('Poll error:', e);
+                const msg = String(e && e.message || e);
+                if (/429|过于频繁|Rate limit/i.test(msg)) {
+                    backoffMs = Math.min(60000, Math.max(backoffMs * 2, 15000));
+                    UI.addLog(`   ⏳ 轮询触发限流，${Math.round(backoffMs / 1000)}s 后重试`, 'warn');
+                }
+                setTimeout(tick, backoffMs);
             }
         };
-        setTimeout(tick, 3000);
+        setTimeout(tick, 8000);
     },
 
     async refresh() {
@@ -177,12 +202,18 @@ const Tasks = {
 
     _renderTaskCard(t) {
         const isQueued = t.status === 'queued';
+        const isScheduled = t.status === 'scheduled';
         const isRunning = t.status === 'running' || t.status === 'pending';
         const isPaused = t.status === 'paused';
         const isWaiting = t.status === 'waiting_review';
         const isFinished = ['completed', 'failed', 'cancelled', 'completed_partial'].includes(t.status);
 
+        const scheduledAt = (t.extra && t.extra.scheduled_at) ? new Date(t.extra.scheduled_at).toLocaleString() : '';
+
         let actions = '';
+        if (isScheduled) {
+            actions += `<button onclick="event.stopPropagation(); Tasks.cancel('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="取消定时任务">❌ 取消定时</button>`;
+        }
         if (isQueued) {
             const currentPriority = (t.extra && t.extra.priority) || 2;
             actions += `<button onclick="event.stopPropagation(); Tasks.boostPriority('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs" title="提升优先级">⬆️ 提升</button>`;
@@ -222,6 +253,7 @@ const Tasks = {
                     <div class="flex gap-3">
                         <span>📊 ${UI.escapeHtml(prog.label)}/${UI.escapeHtml(prog.total || '?')} 步骤 (${prog.percent}%)</span>
                         <span>🎯 ${UI.escapeHtml(t.mode)}</span>
+                        ${isScheduled && scheduledAt ? `<span class="text-purple-600">⏰ ${UI.escapeHtml(scheduledAt)}</span>` : ''}
                     </div>
                     ${t.token_usage ? `<span class="text-purple-600 font-medium">🔤 ${UI.formatTokens(t.token_usage)} tokens</span>` : ''}
                 </div>
@@ -256,7 +288,7 @@ const Tasks = {
             if (this._currentTaskId) {
                 this._loadDetail(this._currentTaskId, true);
             }
-        }, 5000);
+        }, 10000);
     },
 
     closeDetail() {
@@ -334,6 +366,12 @@ const Tasks = {
         const tid = UI.escapeAttr(task.task_id);
         let buttons = '';
         
+        // 检测视觉问题：如果任务在 S007/S009 阶段失败，显示"使用占位图继续"按钮
+        const hasVisualIssue = this._detectVisualIssue(task);
+        if (hasVisualIssue && ['failed', 'completed_partial', 'paused'].includes(task.status)) {
+            buttons += `<button onclick="Tasks.skipVisualAndPublish('${tid}')" class="btn btn-warning btn-sm" title="使用占位图继续发布">🖼️ 使用占位图发布</button>`;
+        }
+        
         if (['running', 'pending', 'waiting_review'].includes(task.status)) {
             buttons += `<button onclick="Tasks.pause('${tid}')" class="btn btn-outline btn-sm">⏸️ 暂停</button>`;
             buttons += `<button onclick="Tasks.cancel('${tid}')" class="btn btn-outline btn-sm text-red-500">⏹️ 取消</button>`;
@@ -349,6 +387,50 @@ const Tasks = {
         buttons += `<button onclick="Tasks.delete('${tid}')" class="btn btn-outline btn-sm text-red-500">🗑️ 删除</button>`;
         
         container.innerHTML = buttons;
+    },
+    
+    _detectVisualIssue(task) {
+        const results = task.results || [];
+        const visualSteps = ['S007-visual.json', 'step.blog.writer.visual'];
+        const gateSteps = ['S009-gate.json', 'step.blog.writer.gate'];
+        
+        // Check if visual step has issues
+        for (const r of results) {
+            const step = (r.step || r.node_id || '').toLowerCase();
+            if (visualSteps.some(s => step.includes(s.toLowerCase().replace('.json', '').split('-').pop()))) {
+                if (r.status === 'failed' || r.status === 'error') return true;
+            }
+            if (gateSteps.some(s => step.includes(s.toLowerCase().replace('.json', '').split('-').pop()))) {
+                if (r.status === 'failed') return true;
+            }
+        }
+        
+        // Check quality gates
+        const gates = task.quality_gates || task.qualityGates;
+        if (gates && gates.visuals && gates.visuals.ok === false) return true;
+        
+        return false;
+    },
+    
+    async skipVisualAndPublish(taskId) {
+        if (!confirm('将从"发布包"节点开始重跑，使用占位图替代真实图片。\n\n适合场景：图片生成质量不佳或失败，但需要快速输出发布包，后续人工替换图片。\n\n核心正文 HTML 质量不受影响。')) return;
+
+        try {
+            UI.addLog(`🖼️ 为任务 ${taskId} 启用占位图模式...`, 'warn');
+
+            const body = {
+                nodeFile: 'S010-publish.json',
+                visualMode: 'placeholder'
+            };
+            
+            const result = await Api.post(`/api/tasks/${taskId}/rerun-from`, body);
+            UI.addLog(`   ✅ 已触发占位图发布: ${result.message}`, 'info');
+            UI.showToast('已启用占位图模式，正在重新生成发布包...', 'success');
+            this.refresh();
+            this._loadDetail(taskId);
+        } catch (e) {
+            UI.showToast(`❌ 操作失败: ${e.message}`, 'error');
+        }
     },
 
     async _loadTaskFiles(taskId) {
@@ -535,7 +617,7 @@ const Tasks = {
         }
     },
 
-    async rerun(taskId, nodeFile, userNote, brandSiteUrl) {
+    async rerun(taskId, nodeFile, userNote, brandSiteUrl, visualMode) {
         const startNode = nodeFile || 'S000-startup.json';
         if (!confirm(`确定要从 ${startNode} 开始重跑吗？之前的结果会被清除。`)) return;
         try {
@@ -544,8 +626,10 @@ const Tasks = {
             if (brandSiteUrl && String(brandSiteUrl).trim()) {
                 body.brandSiteUrl = String(brandSiteUrl).trim();
             }
+            if (visualMode && visualMode !== 'relaxed') body.visualMode = visualMode;
             await Api.post(`/api/tasks/${taskId}/rerun-from`, body);
-            UI.showToast('✅ 任务已开始重跑', 'success');
+            const modeLabels = { relaxed: '', strict: '（严格校验）', placeholder: '（占位符模式）' };
+            UI.showToast('✅ 任务已开始重跑' + (modeLabels[visualMode] || ''), 'success');
             this.refresh();
             if (this._currentTaskId === taskId) this._loadDetail(taskId);
         } catch (e) {
@@ -577,6 +661,8 @@ const Tasks = {
         document.getElementById('rerunUserNote').value = '';
         const siteInput = document.getElementById('rerunBrandSiteUrl');
         if (siteInput) siteInput.value = '';
+        const skipSelect = document.getElementById('rerunVisualMode');
+        if (skipSelect) skipSelect.value = 'relaxed';
         const modal = document.getElementById('rerunModal');
         modal.classList.remove('hidden');
         modal.classList.add('flex');
@@ -594,13 +680,14 @@ const Tasks = {
         const nodeFile = document.getElementById('rerunNodeSelect').value;
         const userNote = document.getElementById('rerunUserNote').value.trim();
         const brandSiteUrl = (document.getElementById('rerunBrandSiteUrl')?.value || '').trim();
+        const visualMode = document.getElementById('rerunVisualMode')?.value || 'relaxed';
         if (brandSiteUrl && !/^https?:\/\/.+/i.test(brandSiteUrl)) {
             UI.showToast('品牌官网地址需以 http:// 或 https:// 开头', 'warn');
             return;
         }
         if (!taskId || !nodeFile) return;
         this.closeRerunModal();
-        this.rerun(taskId, nodeFile, userNote, brandSiteUrl);
+        this.rerun(taskId, nodeFile, userNote, brandSiteUrl, visualMode);
     },
 
     async delete(taskId) {

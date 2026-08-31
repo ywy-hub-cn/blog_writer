@@ -18,143 +18,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
 from brand_site_url import resolve_brand_site_url  # noqa: E402
-
-
-CSS = """
-:root {
-  --green: #5D765F;
-  --green-hover: #4D6350;
-  --green-dark: #3F5242;
-  --green-light-bg: #EEF3EC;
-  --green-lighter-bg: #F5F8F3;
-  --heading-primary: #132019;
-  --heading-secondary: #213027;
-  --text-body: #39433C;
-  --text-muted: #687268;
-  --section-bg: #FBFCF8;
-  --faq-question-bg: #F1F5EF;
-  --faq-answer-bg: #F6F8F3;
-  --border-default: #DFE2DA;
-  --border-green: #C9D5C5;
-  --ref-bg: #F1F3ED;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: var(--font);
-  color: var(--text-body);
-  background: #fff;
-  line-height: 1.74;
-}
-.article-shell {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 48px 20px 80px;
-}
-.blog-meta {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  color: var(--text-muted);
-  font-size: 14px;
-  margin-bottom: 20px;
-}
-.read-time { font-weight: 500; }
-.blog-content h1 {
-  font-size: clamp(38px, 4vw, 52px);
-  font-weight: 600;
-  line-height: 1.08;
-  letter-spacing: -0.02em;
-  color: var(--heading-primary);
-  margin: 0 0 32px;
-}
-.blog-content h2 {
-  font-size: clamp(32px, 3vw, 44px);
-  font-weight: 600;
-  line-height: 1.12;
-  letter-spacing: -0.035em;
-  color: var(--heading-primary);
-  margin: 78px 0 32px;
-}
-.blog-content h3 {
-  font-size: clamp(22px, 1.8vw, 27px);
-  font-weight: 600;
-  line-height: 1.28;
-  color: var(--heading-secondary);
-  margin: 48px 0 16px;
-}
-.blog-content p {
-  font-size: 19px;
-  margin: 0 0 20px;
-}
-.blog-content p[data-field="hook"] {
-  font-size: 20px;
-  line-height: 1.62;
-  color: #2D3831;
-}
-.blog-content ul, .blog-content ol {
-  background: var(--green-light-bg);
-  border: 1px solid var(--border-green);
-  border-radius: 18px;
-  padding: 22px 26px 22px 36px;
-  margin: 22px 0 32px;
-}
-.blog-content li { margin: 0 0 9px; font-size: 19px; }
-.blog-content a {
-  color: #268C37;
-  text-decoration: none;
-  font-weight: 500;
-}
-.blog-content a:hover { color: #1F6F2C; }
-.faq-section {
-  background: var(--section-bg);
-  border: 1px solid var(--border-default);
-  border-radius: 24px;
-  padding: 34px;
-  margin-top: 76px;
-}
-.faq-item {
-  background: var(--faq-question-bg);
-  border: 1px solid var(--border-green);
-  border-radius: 18px;
-  padding: 18px 20px;
-  margin: 0 0 14px;
-}
-.faq-answer {
-  background: var(--faq-answer-bg);
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-}
-.references-section {
-  background: var(--ref-bg);
-  border-radius: 18px;
-  padding: 28px;
-  margin-top: 56px;
-}
-.blog-content table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 24px 0;
-}
-.blog-content th, .blog-content td {
-  border: 1px solid var(--border-default);
-  padding: 10px 12px;
-  text-align: left;
-}
-blockquote {
-  margin: 24px 0;
-  padding: 16px 20px;
-  border-left: 4px solid var(--green);
-  background: var(--green-lighter-bg);
-}
-@media (max-width: 640px) {
-  .blog-content p { font-size: 17px; }
-  .blog-content h2 { font-size: 31px; margin-top: 58px; }
-  .blog-content h3 { font-size: 23px; }
-}
-""".strip()
+from brand_css import resolve_presentation_css  # noqa: E402
 
 
 def _read(path: Path) -> str:
@@ -251,6 +115,7 @@ def build_presentation(
     field_html: str,
     meta: Dict[str, str],
     read_minutes: int,
+    css: str,
 ) -> str:
     body = ensure_h1(field_html.strip(), meta["title"])
     # 若字段化结果已是完整文档，只做校验性包装时抽出 body
@@ -283,7 +148,7 @@ def build_presentation(
 <meta name="twitter:title" content="{escape(title)}">
 <meta name="twitter:description" content="{escape(desc)}">
 <style>
-{CSS}
+{css}
 </style>
 </head>
 <body>
@@ -313,7 +178,8 @@ def generate(out_dir: Path, brand_site_url: str = "") -> Path:
     bid = _load_bid(out_dir)
     meta = extract_meta(bid, site)
     minutes = estimate_read_time(field_html)
-    html_doc = build_presentation(field_html, meta, minutes)
+    css = resolve_presentation_css(out_dir)
+    html_doc = build_presentation(field_html, meta, minutes, css)
 
     out_path = out_dir / "006 呈现文档.html"
     out_path.write_text(html_doc, encoding="utf-8")

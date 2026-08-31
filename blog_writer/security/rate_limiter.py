@@ -1,4 +1,4 @@
-"""
+﻿"""
 blog_writer/security/rate_limiter.py - API 限流中间件
 
 实现双层限流机制：
@@ -266,10 +266,10 @@ def get_rate_limiter() -> RateLimiter:
         with _rate_limiter_lock:
             if _rate_limiter is None:
                 _rate_limiter = RateLimiter(
-                    global_rate=100,
-                    global_burst=200,
-                    per_client_rate=60,
-                    per_client_burst=120,
+                    global_rate=2.0,  # ≈120/min
+                    global_burst=240,
+                    per_client_rate=120,
+                    per_client_burst=240,
                     per_client_window=60
                 )
     return _rate_limiter
@@ -289,8 +289,8 @@ def init_rate_limiter(config: Dict, *, force: bool = False):
         
         security_cfg = config.get("security", {})
         
-        rate = security_cfg.get("rate_limit_per_minute", 10)
-        burst = security_cfg.get("rate_limit_burst", 20)
+        rate = security_cfg.get("rate_limit_per_minute", 120)
+        burst = security_cfg.get("rate_limit_burst", 240)
         window = security_cfg.get("rate_limit_window_seconds", 60)
 
         # TokenBucket.refill_rate 单位为「每秒」；配置项为「每分钟」
@@ -333,3 +333,4 @@ def init_rate_limiter(config: Dict, *, force: bool = False):
 def reinit_rate_limiter(config: Dict):
     """配置热更新：强制按新配置重建限流器。"""
     init_rate_limiter(config, force=True)
+

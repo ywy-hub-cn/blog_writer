@@ -183,7 +183,8 @@ const UI = {
             'rejected': '已驳回',
             'failed': '失败',
             'pending': '排队中',
-            'queued': '排队中'
+            'queued': '排队中',
+            'scheduled': '定时等待'
         }[status] || status;
     },
 
@@ -198,7 +199,8 @@ const UI = {
             'rejected': 'bg-red-100 text-red-700',
             'failed': 'bg-red-100 text-red-700',
             'pending': 'bg-gray-100 text-gray-700',
-            'queued': 'bg-orange-100 text-orange-700'
+            'queued': 'bg-orange-100 text-orange-700',
+            'scheduled': 'bg-purple-100 text-purple-700'
         }[status] || 'bg-gray-100 text-gray-700';
     },
 
@@ -207,7 +209,8 @@ const UI = {
             'running': '⏳', 'completed': '✅', 'completed_partial': '⚠️',
             'waiting_review': '👁️', 'paused': '⏸️',
             'cancelled': '❌', 'rejected': '🚫',
-            'failed': '❌', 'pending': '⏳', 'queued': '🕐'
+            'failed': '❌', 'pending': '⏳', 'queued': '🕐',
+            'scheduled': '⏰'
         }[status] || '❓';
     },
 
