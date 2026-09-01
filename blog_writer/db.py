@@ -696,9 +696,25 @@ class TaskRepository:
         
         return self._row_to_dict(row)
     
-    def list_tasks(self, status: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_tasks(
+        self,
+        status: str = None,
+        statuses: List[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
         conn = self.db.conn
-        if status:
+        if statuses:
+            clean = [s for s in statuses if s]
+            if not clean:
+                return []
+            placeholders = ",".join("?" * len(clean))
+            rows = conn.execute(
+                f"SELECT * FROM tasks WHERE status IN ({placeholders}) "
+                "ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                (*clean, limit, offset),
+            ).fetchall()
+        elif status:
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE status = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                 (status, limit, offset)

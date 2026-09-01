@@ -57,6 +57,8 @@ services:
       - RESPONSE_CASE=${RESPONSE_CASE:-camel}
       - BLOG_WRITER_TASK_AUTH=${BLOG_WRITER_TASK_AUTH:-optional}
       - BLOG_WRITER_HEALTH_ENVELOPE=${BLOG_WRITER_HEALTH_ENVELOPE:-true}
+      # 定时开始/结束调度间隔（秒）；容器须保持运行
+      - BLOG_WRITER_SCHEDULER_INTERVAL_SECONDS=${BLOG_WRITER_SCHEDULER_INTERVAL_SECONDS:-15}
     depends_on:
       postgres:
         condition: service_healthy

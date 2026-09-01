@@ -7,7 +7,7 @@ const Tasks = {
     _currentFileName: null,
     _detailPollTimer: null,
 
-    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens, priority, brandSiteUrl, visualMode, scheduledAt) {
+    async start(brandPath, keywords, userNote, mode, forbiddenWhitelist, model, temperature, maxTokens, priority, brandSiteUrl, visualMode, scheduledAt, scheduledEndAt) {
         if (!keywords) {
             UI.showToast('请输入关键词', 'warn');
             return;
@@ -23,6 +23,7 @@ const Tasks = {
         if (forbiddenWhitelist) UI.addLog(`   禁用词白名单: ${forbiddenWhitelist}`, 'info');
         if (brandSiteUrl) UI.addLog(`   品牌官网: ${brandSiteUrl}`, 'info');
         if (scheduledAt) UI.addLog(`   ⏰ 定时启动: ${new Date(scheduledAt).toLocaleString()}`, 'warn');
+        if (scheduledEndAt) UI.addLog(`   ⏹️ 定时结束(自动暂停): ${new Date(scheduledEndAt).toLocaleString()}`, 'warn');
         const modeLabels = { relaxed: '宽松校验', strict: '严格校验', placeholder: '占位符模式' };
         if (visualMode && visualMode !== 'relaxed') {
             UI.addLog(`   🖼️ 图片校验模式: ${modeLabels[visualMode] || visualMode}`, 'warn');
@@ -43,6 +44,7 @@ const Tasks = {
             if (brandSiteUrl && String(brandSiteUrl).trim()) payload.brand_site_url = String(brandSiteUrl).trim();
             if (visualMode && visualMode !== 'relaxed') payload.visual_mode = visualMode;
             if (scheduledAt) payload.scheduled_at = scheduledAt;
+            if (scheduledEndAt) payload.scheduled_end_at = scheduledEndAt;
             
             const result = await Api.post('/api/tasks/start', payload);
             
@@ -50,7 +52,8 @@ const Tasks = {
             this.poll(result.task_id);
             this.refresh();
             
-            IframeBridge.taskCompleted(result.task_id, { status: 'started' });
+            // 定时任务尚未真正启动，勿对父页误报 started
+            IframeBridge.taskCompleted(result.task_id, { status: result.status || 'started' });
             return result;
         } catch (e) {
             UI.addLog(`   ❌ 启动失败: ${e.message}`, 'error');
@@ -89,6 +92,10 @@ const Tasks = {
 
                 if (task.status === 'running' || task.status === 'waiting_review' || task.status === 'queued') {
                     setTimeout(tick, backoffMs);
+                } else if (task.status === 'paused') {
+                    UI.addLog(`   ⏸️ 任务已暂停（可继续）`, 'warn');
+                    this.refresh();
+                    IframeBridge.taskCompleted(taskId, { status: 'paused', token_usage: task.token_usage });
                 } else {
                     UI.addLog(`   📊 任务结束: ${UI.getStatusLabel(task.status)}`, 
                         task.status === 'completed' ? 'info' : 'warn');
@@ -209,6 +216,7 @@ const Tasks = {
         const isFinished = ['completed', 'failed', 'cancelled', 'completed_partial'].includes(t.status);
 
         const scheduledAt = (t.extra && t.extra.scheduled_at) ? new Date(t.extra.scheduled_at).toLocaleString() : '';
+        const scheduledEndAt = (t.extra && t.extra.scheduled_end_at) ? new Date(t.extra.scheduled_end_at).toLocaleString() : '';
 
         let actions = '';
         if (isScheduled) {
@@ -234,6 +242,9 @@ const Tasks = {
         actions += `<button onclick="event.stopPropagation(); Tasks.delete('${UI.escapeAttr(t.task_id)}')" class="btn btn-outline btn-xs text-red-500" title="删除任务">🗑️ 删除</button>`;
 
         const prog = this._taskProgress(t);
+        const scheduleHint = (scheduledAt || scheduledEndAt)
+            ? `<span class="text-purple-600">⏰ ${UI.escapeHtml(scheduledAt || '?')}${scheduledEndAt ? ` → ${UI.escapeHtml(scheduledEndAt)}` : ''}</span>`
+            : '';
 
         return `
             <div class="border rounded-lg p-4 card-hover cursor-pointer" onclick="Tasks.showDetail('${UI.escapeAttr(t.task_id)}')">
@@ -250,10 +261,10 @@ const Tasks = {
                     </span>
                 </div>
                 <div class="mt-3 flex justify-between items-center text-xs text-gray-500">
-                    <div class="flex gap-3">
+                    <div class="flex gap-3 flex-wrap">
                         <span>📊 ${UI.escapeHtml(prog.label)}/${UI.escapeHtml(prog.total || '?')} 步骤 (${prog.percent}%)</span>
                         <span>🎯 ${UI.escapeHtml(t.mode)}</span>
-                        ${isScheduled && scheduledAt ? `<span class="text-purple-600">⏰ ${UI.escapeHtml(scheduledAt)}</span>` : ''}
+                        ${scheduleHint}
                     </div>
                     ${t.token_usage ? `<span class="text-purple-600 font-medium">🔤 ${UI.formatTokens(t.token_usage)} tokens</span>` : ''}
                 </div>
@@ -308,7 +319,15 @@ const Tasks = {
             
             // 标题
             document.getElementById('taskDetailTitle').textContent = task.keywords || '未知任务';
-            document.getElementById('taskDetailSubtitle').textContent = `任务ID: ${task.task_id}`;
+            let subtitle = `任务ID: ${task.task_id}`;
+            const sat = task.extra && task.extra.scheduled_at;
+            const send = task.extra && task.extra.scheduled_end_at;
+            if (sat || send) {
+                const a = sat ? new Date(sat).toLocaleString() : '?';
+                const b = send ? new Date(send).toLocaleString() : '';
+                subtitle += ` · ⏰ ${a}${b ? ' → ' + b : ''}`;
+            }
+            document.getElementById('taskDetailSubtitle').textContent = subtitle;
             
             // 状态
             const statusEl = document.getElementById('taskDetailStatus');

@@ -160,22 +160,34 @@ function confirmStartTask() {
     const visualMode = document.getElementById('visualMode')?.value || 'relaxed';
     const enableSchedule = document.getElementById('enableSchedule')?.checked || false;
     const scheduledVal = document.getElementById('scheduledAt')?.value || '';
+    const scheduledEndVal = document.getElementById('scheduledEndAt')?.value || '';
     let scheduledAt = null;
+    let scheduledEndAt = null;
     if (enableSchedule) {
         if (!scheduledVal) {
             UI.showToast('请选择定时启动时间', 'warn');
             return;
         }
+        if (!scheduledEndVal) {
+            UI.showToast('请选择定时结束时间', 'warn');
+            return;
+        }
         const d = new Date(scheduledVal);
-        if (isNaN(d.getTime())) {
+        const end = new Date(scheduledEndVal);
+        if (isNaN(d.getTime()) || isNaN(end.getTime())) {
             UI.showToast('定时时间格式无效', 'warn');
             return;
         }
         if (d.getTime() <= Date.now()) {
-            UI.showToast('定时时间必须晚于当前时间', 'warn');
+            UI.showToast('定时启动时间必须晚于当前时间', 'warn');
+            return;
+        }
+        if (end.getTime() <= d.getTime()) {
+            UI.showToast('定时结束时间必须晚于启动时间', 'warn');
             return;
         }
         scheduledAt = d.toISOString();
+        scheduledEndAt = end.toISOString();
     }
     Tasks.start(
         brandPath,
@@ -189,7 +201,8 @@ function confirmStartTask() {
         parseInt(priority),
         document.getElementById('brandSiteUrl')?.value || '',
         visualMode,
-        scheduledAt
+        scheduledAt,
+        scheduledEndAt
     );
 }
 
@@ -204,7 +217,9 @@ function toggleScheduleInput() {
     }
     if (!checked) {
         const el = document.getElementById('scheduledAt');
+        const endEl = document.getElementById('scheduledEndAt');
         if (el) el.value = '';
+        if (endEl) endEl.value = '';
     }
 }
 function refreshTasks() { Tasks.refresh(); }

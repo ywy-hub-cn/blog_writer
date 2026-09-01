@@ -100,14 +100,21 @@ class TaskControlMixin:
                 )
             return True
 
-    def pause_task(self, task_id: str) -> bool:
+    def pause_task(self, task_id: str, *, reason: str = "") -> bool:
         with self._get_task_sync_lock(task_id):
             task = self._ensure_task_loaded(task_id)
             if task and task["status"] in ("running", "waiting_review"):
                 task["_prev_status"] = task["status"]
                 task["status"] = "paused"
                 self._save_state(task_id)
-                self._fire_task_webhook(task_id, "task.paused", {"task_id": task_id})
+                # 唤醒审核等待循环，避免暂停后仍阻塞在 waiting_review
+                _ev = self._pause_events.get(task_id)
+                if _ev is not None:
+                    _ev.set()
+                payload = {"task_id": task_id}
+                if reason:
+                    payload["reason"] = reason
+                self._fire_task_webhook(task_id, "task.paused", payload)
                 return True
             return False
 
@@ -116,6 +123,14 @@ class TaskControlMixin:
             task = self._ensure_task_loaded(task_id)
             if not task or task["status"] != "paused":
                 return False
+
+            # 人工恢复：清掉定时结束标记，避免调度器下一轮再次自动暂停
+            extra = dict(task.get("extra") or {})
+            if extra.pop("paused_by_schedule_end", None) or extra.get("scheduled_end_at"):
+                if extra.get("scheduled_end_at"):
+                    extra["schedule_end_cleared_on_resume"] = extra.get("scheduled_end_at")
+                extra.pop("scheduled_end_at", None)
+                task["extra"] = extra
 
             # 恢复到暂停前的状态（running 或 waiting_review）
             prev_status = task.get("_prev_status", "running")

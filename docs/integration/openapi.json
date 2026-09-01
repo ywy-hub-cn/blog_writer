@@ -5518,7 +5518,7 @@
               }
             ],
             "title": "Callbackevents",
-            "description": "订阅的 Webhook 事件列表"
+            "description": "订阅的 Webhook 事件列表。默认含 task.created/started/paused/resumed 及终态；定时窗口会推送 started(schedule_due)、paused/cancelled(schedule_end)。不传则用服务端默认全集。"
           },
           "scheduledAt": {
             "anyOf": [
@@ -5531,7 +5531,20 @@
               }
             ],
             "title": "Scheduledat",
-            "description": "定时启动时间（ISO 8601，须晚于当前时间）。传入后任务先进入 status=scheduled，由服务器调度器到期后自动启动；浏览器可关闭，但 blog-writer 进程须保持运行。批量 /batch 暂不支持此字段。"
+            "description": "定时启动时间（ISO 8601，须晚于当前时间）。须与 scheduledEndAt 成对传入。传入后任务先进入 status=scheduled，由服务器调度器到期后自动启动；浏览器可关闭，但 blog-writer 进程须保持运行。批量 /batch 暂不支持此字段。"
+          },
+          "scheduledEndAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduledendat",
+            "description": "定时结束时间（ISO 8601，须晚于 scheduledAt）。到期后服务器自动暂停运行中/排队中任务；若尚未启动则取消。与 scheduledAt 成对必填。会推送 Webhook task.paused 或 task.cancelled（reason=schedule_end）。人工 resume 会清除结束窗口。Java 部署请设 RESPONSE_CASE=camel。"
           }
         },
         "type": "object",
@@ -5540,6 +5553,38 @@
           "keywords"
         ],
         "title": "StartTaskRequest"
+      },
+      "ScheduledTaskItem": {
+        "type": "object",
+        "title": "ScheduledTaskItem",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "任务 ID（snake 响应为 task_id）"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["scheduled"],
+            "description": "固定为 scheduled"
+          },
+          "keywords": {
+            "type": "string"
+          },
+          "scheduledAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "定时开始时间"
+          },
+          "scheduledEndAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "定时结束时间（到期自动暂停）"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "创建时间（snake 为 created_at）"
+          }
+        }
       },
       "BatchTaskItem": {
         "properties": {

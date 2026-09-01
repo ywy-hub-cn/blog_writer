@@ -8,8 +8,11 @@ from blog_writer.api.case_convert import maybe_camel
 # Default: terminal + lifecycle events Java integrators care about
 DEFAULT_CALLBACK_EVENTS = [
     "task.created",
+    "task.started",
     "task.step_completed",
     "task.waiting_review",
+    "task.paused",
+    "task.resumed",
     "task.completed",
     "task.completed_partial",
     "task.failed",

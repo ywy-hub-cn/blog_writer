@@ -251,7 +251,9 @@
                                 <div id="scheduleInputGroup" class="form-group hidden">
                                     <label class="form-label">定时启动时间</label>
                                     <input id="scheduledAt" type="datetime-local" class="form-input">
-                                    <p class="form-hint">须选择未来时间。建议设在 DeepSeek 非高峰时段；请确保部署环境 24×7 在线（Linux/Docker），而非依赖本机开机。</p>
+                                    <label class="form-label mt-3">定时结束时间</label>
+                                    <input id="scheduledEndAt" type="datetime-local" class="form-input">
+                                    <p class="form-hint">须选择未来时间，且结束晚于开始。到结束时间后服务器会自动暂停任务。请确保部署环境 24×7 在线（Linux/Docker），而非依赖本机开机。</p>
                                 </div>
                                 <button onclick="startTask()" class="btn btn-primary btn-block btn-lg">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
@@ -534,14 +536,14 @@
     <script src="/static/js/api.js?v=12"></script>
     <script src="/static/js/auth.js?v=9"></script>
     <script src="/static/js/ui.js?v=10"></script>
-    <script src="/static/js/tasks.js?v=18"></script>
+    <script src="/static/js/tasks.js?v=21"></script>
     <script src="/static/js/brands.js?v=10"></script>
     <script src="/static/js/brand-manager.js?v=9"></script>
     <!-- <script src="/static/js/vue-brand-manager.js?v=9"></script> 暂时禁用，用于调试 -->
     <script src="/static/js/nodes.js?v=9"></script>
     <script src="/static/js/reviews.js?v=12"></script>
     <script src="/static/js/config.js?v=9"></script>
-    <script src="/static/js/app.js?v=13"></script>
+    <script src="/static/js/app.js?v=14"></script>
 
     <!-- ========== 品牌管理弹窗 ========== -->
     <div id="brandFilesModal" class="fixed inset-0 z-50 hidden items-center justify-center">

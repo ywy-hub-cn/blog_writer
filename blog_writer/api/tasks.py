@@ -194,6 +194,7 @@ class StartTaskRequest(BaseModel):
     skip_visual_check: bool = Field(default=False, alias="skipVisualCheck")
     visual_mode: str = Field(default="relaxed", alias="visualMode")
     scheduled_at: Optional[str] = Field(default=None, alias="scheduledAt")
+    scheduled_end_at: Optional[str] = Field(default=None, alias="scheduledEndAt")
 
     @model_validator(mode="before")
     @classmethod
@@ -298,9 +299,9 @@ class StartTaskRequest(BaseModel):
         # 附加要求不设硬性字数上限；仅清洗控制字符，避免截断运营长指令
         return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", v or "")
 
-    @field_validator("scheduled_at", mode="before")
+    @field_validator("scheduled_at", "scheduled_end_at", mode="before")
     @classmethod
-    def normalize_scheduled_at(cls, v):
+    def normalize_schedule_times(cls, v):
         if v is None or v == "":
             return None
         return str(v).strip()
@@ -314,7 +315,34 @@ class StartTaskRequest(BaseModel):
         try:
             return assert_scheduled_at_is_future(v)
         except ValueError as e:
-            raise ValueError(f"定时时间非法: {e}") from e
+            raise ValueError(f"定时开始时间非法: {e}") from e
+
+    @field_validator("scheduled_end_at")
+    @classmethod
+    def validate_scheduled_end_at(cls, v):
+        if v is None:
+            return None
+        from blog_writer.workflow_service import assert_scheduled_at_is_future
+        try:
+            return assert_scheduled_at_is_future(v)
+        except ValueError as e:
+            raise ValueError(f"定时结束时间非法: {e}") from e
+
+    @model_validator(mode="after")
+    def validate_schedule_window(self):
+        if self.scheduled_end_at and not self.scheduled_at:
+            raise ValueError("指定了定时结束时间时必须同时指定定时开始时间")
+        if self.scheduled_at and not self.scheduled_end_at:
+            raise ValueError("定时启动须同时指定结束时间（到期自动暂停）")
+        if self.scheduled_at and self.scheduled_end_at:
+            from blog_writer.workflow_service import assert_scheduled_end_after_start
+            try:
+                self.scheduled_end_at = assert_scheduled_end_after_start(
+                    self.scheduled_at, self.scheduled_end_at
+                )
+            except ValueError as e:
+                raise ValueError(f"定时时间窗口非法: {e}") from e
+        return self
 
     @field_validator("brand_site_url")
     @classmethod
@@ -645,6 +673,7 @@ async def start_task(
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
                 scheduled_at=req.scheduled_at,
+                scheduled_end_at=req.scheduled_end_at,
                 priority=req.priority,
                 skip_visual_check=req.skip_visual_check,
                 visual_mode=req.visual_mode,
@@ -685,6 +714,14 @@ async def start_task(
                     "keywords": req.keywords,
                     "mode": req.mode,
                     "status": "scheduled" if is_scheduled else "started",
+                    **(
+                        {
+                            "scheduled_at": req.scheduled_at,
+                            "scheduled_end_at": req.scheduled_end_at,
+                        }
+                        if is_scheduled
+                        else {}
+                    ),
                 },
             ),
             name=f"webhook:task.created:{task_id}",
@@ -694,6 +731,8 @@ async def start_task(
         task = service.get_task_status(task_id) or {}
         extra = dict(task.get("extra") or {})
         extra["scheduled_at"] = req.scheduled_at
+        if req.scheduled_end_at:
+            extra["scheduled_end_at"] = req.scheduled_end_at
         # 保存完整启动参数，调度器到期后据此启动
         extra["scheduled_params"] = {
             k: v for k, v in kwargs.items() if k not in ("task_id", "resume_from")
@@ -706,7 +745,8 @@ async def start_task(
                 "task_id": task_id,
                 "status": "scheduled",
                 "scheduled_at": req.scheduled_at,
-                "message": "任务已定时，将在指定时间由服务器自动启动",
+                "scheduled_end_at": req.scheduled_end_at,
+                "message": "任务已定时，将在指定时间由服务器自动启动，结束时间到期后自动暂停",
                 "owner_id": owner_id,
             },
             full=False,

@@ -106,6 +106,17 @@ def assert_scheduled_at_is_future(value, *, grace_seconds: float = 5.0) -> str:
     return target.isoformat().replace("+00:00", "Z")
 
 
+def assert_scheduled_end_after_start(start_value, end_value) -> str:
+    """校验结束时间晚于开始时间，返回规范化 ISO UTC 结束时间。"""
+    start = parse_scheduled_at(start_value)
+    end = parse_scheduled_at(end_value)
+    if end <= start:
+        raise ValueError(
+            f"定时结束时间必须晚于开始时间（start={start.isoformat()}, end={end.isoformat()}）"
+        )
+    return end.isoformat().replace("+00:00", "Z")
+
+
 class WorkflowService(TaskControlMixin):
     """工作流服务 - 支持状态持久化、断点续跑、自动重试、指定节点重跑"""
     
@@ -133,6 +144,8 @@ class WorkflowService(TaskControlMixin):
         self._scheduler_interval_seconds = float(
             os.environ.get("BLOG_WRITER_SCHEDULER_INTERVAL_SECONDS", "15") or 15
         )
+        # 防止同一 scheduled 任务被重复 create_task 启动
+        self._scheduled_launching: set = set()
         # 防止同一 task 并发执行多个编排协程
         self._running_tasks: set = set()
         self._running_tasks_lock = threading.Lock()
@@ -479,13 +492,13 @@ class WorkflowService(TaskControlMixin):
 
         try:
             while True:
-                if self._tasks[task_id].get("status") == "cancelled":
+                if self._tasks[task_id].get("status") in ("cancelled", "paused"):
                     break
                 if self._tasks[task_id].get("review_decision"):
                     break
                 if self._pull_external_review_decision(task_id):
                     if self._tasks[task_id].get("review_decision") or (
-                        self._tasks[task_id].get("status") == "cancelled"
+                        self._tasks[task_id].get("status") in ("cancelled", "paused")
                     ):
                         _ev = self._pause_events.get(task_id)
                         if _ev is not None:
@@ -543,6 +556,10 @@ class WorkflowService(TaskControlMixin):
             task_log("   🛑 Task cancelled during review")
             return True, "reject", {}
 
+        if self._tasks[task_id].get("status") == "paused":
+            task_log("   ⏸️ Task paused during review")
+            return True, "pause", {}
+
         decision = str(self._tasks[task_id].get("review_decision", "approve"))
         mods = self._tasks[task_id].get("review_modifications") or {}
         task_log(f"   ✅ Review decision: {decision}")
@@ -569,33 +586,52 @@ class WorkflowService(TaskControlMixin):
         with self._running_tasks_lock:
             return task_id in self._running_tasks
 
-    async def _acquire_slot(self, task_id: str, priority: int = 2) -> float:
-        """获取执行槽位，支持优先级调度。返回等待时长（秒）。"""
+    async def _acquire_slot(self, task_id: str, priority: int = 2):
+        """获取执行槽位，支持优先级调度。
+
+        Returns:
+            (wait_seconds, held_slot)
+            held_slot=True 表示调用方持有一个并发槽（立即获得或由 _release_slot 转让）。
+            held_slot=False 表示排队期间被取消/定时暂停唤醒，未持有槽，禁止再调用 _release_slot。
+        """
         import time
         wait_start = time.time()
-        
+
         async with self._queue_lock:
             if self._available_slots > 0:
                 self._available_slots -= 1
-                return 0.0
+                return 0.0, True
             # 无空闲槽位，进入优先级队列等待
             self._queue_counter += 1
             event = asyncio.Event()
             entry = (-priority, self._queue_counter, task_id, event)
             self._priority_queue.append(entry)
             self._priority_queue.sort()  # 按优先级降序，同优先级FIFO
-        
+
         await event.wait()
-        return time.time() - wait_start
+        task = self._tasks.get(task_id)
+        aborted = bool(task and task.pop("_queue_aborted", False))
+        return time.time() - wait_start, (not aborted)
+
+    def _abort_queued_waiter(self, task_id: str) -> bool:
+        """从优先级队列移除任务并唤醒等待协程（不转让并发槽）。"""
+        for i, entry in enumerate(self._priority_queue):
+            if entry[2] == task_id:
+                _, _, _, event = self._priority_queue.pop(i)
+                task = self._tasks.get(task_id)
+                if task is not None:
+                    task["_queue_aborted"] = True
+                event.set()
+                return True
+        return False
 
     def _release_slot(self):
         """释放槽位，唤醒队列中最高优先级任务。"""
-        import asyncio
         # 先尝试直接释放槽位
         if self._priority_queue:
-            # 有排队任务，唤醒最高优先级的
+            # 有排队任务，唤醒最高优先级的（槽位转让，被唤醒方 held_slot=True）
             entry = self._priority_queue.pop(0)
-            _, _, task_id, event = entry
+            _, _, _task_id, event = entry
             event.set()
         else:
             self._available_slots += 1
@@ -642,16 +678,12 @@ class WorkflowService(TaskControlMixin):
 
     def cancel_queued_task(self, task_id: str) -> bool:
         """取消排队中的任务。"""
-        for i, entry in enumerate(self._priority_queue):
-            if entry[2] == task_id:
-                _, _, _, event = self._priority_queue.pop(i)
-                event.set()  # 唤醒但标记为取消
-                # 设置任务状态为cancelled
-                if task_id in self._tasks:
-                    self._tasks[task_id]["status"] = "cancelled"
-                    self._save_state(task_id)
-                return True
-        return False
+        if not self._abort_queued_waiter(task_id):
+            return False
+        if task_id in self._tasks:
+            self._tasks[task_id]["status"] = "cancelled"
+            self._save_state(task_id)
+        return True
 
     # ============ 定时任务调度器 ============
     def start_scheduler(self) -> None:
@@ -677,16 +709,18 @@ class WorkflowService(TaskControlMixin):
             self._scheduler_task = None
 
     async def _schedule_loop(self) -> None:
-        """调度器主循环：周期性扫描到期的 scheduled 任务并触发启动。"""
+        """调度器主循环：周期性扫描到期启动与到期自动暂停。"""
         # 启动时先立即清扫一次（处理服务器重启后遗留的到期任务）
         try:
             await self._dispatch_due_scheduled_tasks()
+            await self._dispatch_due_schedule_ends()
         except Exception as e:
             logger.warning("定时任务初始清扫失败: %s", e)
         while self._scheduler_running:
             await asyncio.sleep(self._scheduler_interval_seconds)
             try:
                 await self._dispatch_due_scheduled_tasks()
+                await self._dispatch_due_schedule_ends()
             except Exception as e:
                 logger.warning("定时任务清扫失败: %s", e)
 
@@ -726,14 +760,142 @@ class WorkflowService(TaskControlMixin):
             except Exception as e:
                 logger.error("触发定时任务 %s 失败: %s", tid, e)
 
+    async def _dispatch_due_schedule_ends(self) -> None:
+        """扫描带 scheduled_end_at 且已到期的活动任务，自动暂停。"""
+        pause_ids: List[str] = []
+        active = ("scheduled", "queued", "running", "waiting_review", "pending")
+        active_set = set(active)
+
+        def _end_due(tid: str, end_at: str) -> bool:
+            try:
+                parse_scheduled_at(end_at)
+            except ValueError:
+                logger.warning(
+                    "任务 %s 的 scheduled_end_at 无法解析，跳过自动暂停: %r",
+                    tid,
+                    end_at,
+                )
+                return False
+            return scheduled_at_is_due(end_at)
+
+        for tid, t in list(self._tasks.items()):
+            if t.get("status") not in active_set:
+                continue
+            end_at = (t.get("extra") or {}).get("scheduled_end_at")
+            if end_at and _end_due(tid, end_at):
+                pause_ids.append(tid)
+
+        if self._use_db:
+            try:
+                for db_task in self._task_repo.list_tasks(
+                    statuses=list(active), limit=2000
+                ):
+                    tid = db_task.get("task_id", "")
+                    if not tid or tid in pause_ids:
+                        continue
+                    end_at = (db_task.get("extra") or {}).get("scheduled_end_at")
+                    if not end_at or not _end_due(tid, end_at):
+                        continue
+                    self._hydrate_review_fields(db_task)
+                    if tid not in self._tasks:
+                        self._tasks[tid] = db_task
+                        self._task_logs.setdefault(tid, [])
+                    pause_ids.append(tid)
+            except Exception as e:
+                logger.warning("扫描定时结束任务失败: %s", e)
+
+        for tid in pause_ids:
+            try:
+                self._pause_for_schedule_end(tid)
+            except Exception as e:
+                logger.error("定时结束自动暂停 %s 失败: %s", tid, e)
+
+    def _pause_for_schedule_end(self, task_id: str) -> bool:
+        """结束时间到期：运行中暂停；排队中移出队列并暂停；未启动则取消。"""
+        # 注意：running/waiting_review 走 pause_task（自带锁），不可在本方法持锁时嵌套调用
+        with self._get_task_sync_lock(task_id):
+            task = self._tasks.get(task_id) or self._ensure_task_loaded(task_id)
+            if not task:
+                return False
+            status = task.get("status")
+            if status in (
+                "completed",
+                "failed",
+                "cancelled",
+                "rejected",
+                "completed_partial",
+                "paused",
+            ):
+                return False
+
+            extra = dict(task.get("extra") or {})
+            end_at = extra.get("scheduled_end_at", "")
+
+            if status == "scheduled":
+                task["status"] = "cancelled"
+                task["end_time"] = datetime.now().isoformat()
+                extra["last_error"] = f"已到定时结束时间（{end_at}），任务未启动即取消"
+                extra["paused_by_schedule_end"] = True
+                task["extra"] = extra
+                self._save_state(task_id)
+                self._fire_task_webhook(
+                    task_id,
+                    "task.cancelled",
+                    {"task_id": task_id, "reason": "schedule_end", "status": "cancelled"},
+                )
+                logger.info("定时任务 %s 结束窗口已过且未启动，已取消", task_id)
+                return True
+
+            if status == "queued":
+                self._abort_queued_waiter(task_id)
+                task["_prev_status"] = "queued"
+                task["status"] = "paused"
+                extra["paused_by_schedule_end"] = True
+                extra["last_error"] = f"已到定时结束时间（{end_at}），排队任务已自动暂停"
+                task["extra"] = extra
+                self._save_state(task_id)
+                self._fire_task_webhook(
+                    task_id, "task.paused", {"task_id": task_id, "reason": "schedule_end"}
+                )
+                logger.info("定时任务 %s 结束时间到期，已从排队暂停", task_id)
+                return True
+
+            if status not in ("running", "waiting_review", "pending"):
+                return False
+            end_at_for_running = end_at
+
+        # 锁外调用 pause_task，避免与 TaskControlMixin 嵌套死锁
+        ok = self.pause_task(task_id, reason="schedule_end")
+        if ok:
+            with self._get_task_sync_lock(task_id):
+                task = self._tasks.get(task_id) or self._ensure_task_loaded(task_id)
+                if task:
+                    extra = dict(task.get("extra") or {})
+                    extra["paused_by_schedule_end"] = True
+                    extra["last_error"] = (
+                        f"已到定时结束时间（{end_at_for_running}），任务已自动暂停"
+                    )
+                    task["extra"] = extra
+                    self._save_state(task_id)
+            logger.info("定时任务 %s 结束时间到期，已自动暂停", task_id)
+        return ok
+
     def _launch_scheduled_task(self, task_id: str) -> None:
         """将到期的 scheduled 任务转为排队执行（fire-and-forget）。"""
+        if task_id in self._scheduled_launching:
+            return
         task = self._tasks.get(task_id) or self._ensure_task_loaded(task_id)
         if not task:
             return
         if task.get("status") == "cancelled":
             return
         extra = dict(task.get("extra") or {})
+
+        # 已过结束时间：不再启动
+        end_at = extra.get("scheduled_end_at")
+        if end_at and scheduled_at_is_due(end_at):
+            self._pause_for_schedule_end(task_id)
+            return
 
         # 标记为 queued，避免 start_workflow 复用 scheduled 状态导致进度异常
         if task.get("status") == "scheduled":
@@ -752,11 +914,41 @@ class WorkflowService(TaskControlMixin):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            # 理论上调度循环内不会发生；回退 scheduled 以免卡在 queued
+            if task.get("status") == "queued" and extra.get("scheduled_at"):
+                task["status"] = "scheduled"
+                self._save_state(task_id)
+            logger.warning("定时任务 %s 启动失败：无运行中的事件循环", task_id)
             return
+
+        self._scheduled_launching.add(task_id)
         coro = self.start_workflow(**params)
         t = loop.create_task(coro)
         _scheduled_futures.add(t)
-        t.add_done_callback(_scheduled_futures.discard)
+
+        def _done(fut, tid=task_id):
+            _scheduled_futures.discard(fut)
+            self._scheduled_launching.discard(tid)
+            try:
+                exc = fut.exception()
+            except asyncio.CancelledError:
+                return
+            if exc:
+                logger.error("定时任务 %s 启动协程异常: %s", tid, exc)
+
+        t.add_done_callback(_done)
+        # 通知 Java/对接方：定时窗口已到，任务进入排队执行
+        self._fire_task_webhook(
+            task_id,
+            "task.started",
+            {
+                "task_id": task_id,
+                "status": "queued",
+                "reason": "schedule_due",
+                "scheduled_at": extra.get("scheduled_at", ""),
+                "scheduled_end_at": extra.get("scheduled_end_at", ""),
+            },
+        )
         logger.info("定时任务 %s 已到期，触发启动", task_id)
 
     def _rebuild_start_params(self, task_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
@@ -834,6 +1026,7 @@ class WorkflowService(TaskControlMixin):
             "status": "scheduled",
             "keywords": task.get("keywords", ""),
             "scheduled_at": extra.get("scheduled_at", ""),
+            "scheduled_end_at": extra.get("scheduled_end_at", ""),
             "created_at": task.get("start_time", ""),
         }
 
@@ -1197,6 +1390,7 @@ class WorkflowService(TaskControlMixin):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         scheduled_at: Optional[str] = None,
+        scheduled_end_at: Optional[str] = None,
         priority: int = 2,
         skip_visual_check: bool = False,
         visual_mode: str = "relaxed",
@@ -1243,6 +1437,8 @@ class WorkflowService(TaskControlMixin):
             extra["max_tokens"] = max_tokens
         if scheduled_at:
             extra["scheduled_at"] = scheduled_at
+        if scheduled_end_at:
+            extra["scheduled_end_at"] = scheduled_end_at
         # 统一写入启动配置，_rebuild_start_params / rerun_from_node 等路径从 extra 读取
         extra["priority"] = priority
         extra["skip_visual_check"] = skip_visual_check
@@ -1478,13 +1674,23 @@ class WorkflowService(TaskControlMixin):
         priority = (self._tasks.get(task_id, {}).get("extra") or {}).get("priority", 2)
         self._concurrency_stats["total_started"] += 1
         task_logger.info(f"📋 任务排队中（优先级: {priority_label(priority)}，当前并发 {len(self._running_tasks)}/{self.max_concurrent_tasks}）")
-        wait_time = await self._acquire_slot(task_id, priority)
+        wait_time, held_slot = await self._acquire_slot(task_id, priority)
         
-        # 检查是否被取消
-        if self._tasks.get(task_id, {}).get("status") == "cancelled":
-            task_logger.info("❌ 任务已被取消，退出执行")
-            self._release_slot()
-            return {"task_id": task_id, "status": "cancelled", "message": "任务已取消"}
+        # 检查是否在排队期间被取消或定时结束暂停
+        status_after_wait = self._tasks.get(task_id, {}).get("status")
+        if status_after_wait in ("cancelled", "paused"):
+            task_logger.info(
+                "❌ 任务已%s，退出执行",
+                "取消" if status_after_wait == "cancelled" else "暂停",
+            )
+            # 仅在真正持有槽位时释放，避免排队中止导致 available_slots 虚增
+            if held_slot:
+                self._release_slot()
+            return {
+                "task_id": task_id,
+                "status": status_after_wait,
+                "message": "任务已取消" if status_after_wait == "cancelled" else "任务已暂停",
+            }
         
         try:
             # 获取到槽位后，标记为运行中
@@ -1516,7 +1722,8 @@ class WorkflowService(TaskControlMixin):
             self._concurrency_stats["total_exec_time"] += time.time() - exec_start
             return result
         finally:
-            self._release_slot()
+            if held_slot:
+                self._release_slot()
     
     async def _resume_workflow(
         self,
@@ -2236,18 +2443,19 @@ class WorkflowService(TaskControlMixin):
         
         self._save_state(task_id)
         
-        # 触发 webhook 通知
-        webhook_data = {
-            "task_id": task_id,
-            "status": final_status,
-            "steps_completed": total_steps_completed,
-            "total_steps": len(step_files),
-            "total_tokens": total_tokens,
-            "token_usage": total_tokens,
-            "keywords": self._tasks[task_id].get("keywords", ""),
-        }
-        webhook_data.update(self._webhook_payload_extra(task_id))
-        self._fire_task_webhook(task_id, f"task.{final_status}", webhook_data)
+        # 控制面 pause/cancel 已发过 webhook；此处再发会导致对接方重复计数
+        if final_status not in ("paused", "cancelled"):
+            webhook_data = {
+                "task_id": task_id,
+                "status": final_status,
+                "steps_completed": total_steps_completed,
+                "total_steps": len(step_files),
+                "total_tokens": total_tokens,
+                "token_usage": total_tokens,
+                "keywords": self._tasks[task_id].get("keywords", ""),
+            }
+            webhook_data.update(self._webhook_payload_extra(task_id))
+            self._fire_task_webhook(task_id, f"task.{final_status}", webhook_data)
 
         # 终态后延迟清理内存字典，降低长期运行 OOM 风险（DB 仍为真相源）
         if final_status in (
@@ -2509,26 +2717,50 @@ class WorkflowService(TaskControlMixin):
                 max_tokens = tokens
         return max_tokens
     
+    @staticmethod
+    def _list_extra_fields(extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """列表接口只回传前端卡片需要的 extra 子集（避免带上 scheduled_params 等大字段）。"""
+        extra = extra or {}
+        out: Dict[str, Any] = {
+            "priority": extra.get("priority", 2),
+        }
+        if extra.get("scheduled_at"):
+            out["scheduled_at"] = extra["scheduled_at"]
+        if extra.get("scheduled_end_at"):
+            out["scheduled_end_at"] = extra["scheduled_end_at"]
+        if extra.get("paused_by_schedule_end"):
+            out["paused_by_schedule_end"] = True
+        last_error = extra.get("last_error")
+        if last_error:
+            out["last_error"] = str(last_error)[:300]
+        return out
+
     def list_tasks(self) -> List[Dict[str, Any]]:
         tasks = []
         seen_ids = set()
-        
-        # 内存中的任务
-        for task_id, task in self._tasks.items():
-            seen_ids.add(task_id)
+
+        def _row(task_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
             results = task.get("results", [])
-            token_usage = self._calc_task_token_usage(results)
-            tasks.append({
+            extra = task.get("extra") or {}
+            return {
                 "task_id": task_id,
-                "status": task["status"],
+                "status": task.get("status", "unknown"),
                 "mode": task.get("mode", ""),
                 "keywords": task.get("keywords", ""),
                 "start_time": task.get("start_time", ""),
                 "current_step": task.get("current_step", 0),
                 "total_steps": task.get("total_steps", 0),
-                "token_usage": token_usage,
-                "owner_id": task.get("owner_id") or (task.get("extra") or {}).get("owner_id", ""),
-            })
+                "token_usage": self._calc_task_token_usage(results),
+                "owner_id": task.get("owner_id") or extra.get("owner_id", ""),
+                "extra": self._list_extra_fields(extra),
+                "scheduled_at": extra.get("scheduled_at") or None,
+                "scheduled_end_at": extra.get("scheduled_end_at") or None,
+            }
+        
+        # 内存中的任务
+        for task_id, task in self._tasks.items():
+            seen_ids.add(task_id)
+            tasks.append(_row(task_id, task))
         
         # 数据库中的任务
         if self._use_db:
@@ -2536,22 +2768,9 @@ class WorkflowService(TaskControlMixin):
                 db_tasks = self._task_repo.list_tasks(limit=200)
                 for db_task in db_tasks:
                     task_id = db_task.get("task_id", "")
-                    if task_id not in seen_ids:
+                    if task_id and task_id not in seen_ids:
                         seen_ids.add(task_id)
-                        results = db_task.get("results", [])
-                        token_usage = self._calc_task_token_usage(results)
-                        tasks.append({
-                            "task_id": task_id,
-                            "status": db_task.get("status", "unknown"),
-                            "mode": db_task.get("mode", ""),
-                            "keywords": db_task.get("keywords", ""),
-                            "start_time": db_task.get("start_time", ""),
-                            "current_step": db_task.get("current_step", 0),
-                            "total_steps": db_task.get("total_steps", 0),
-                            "token_usage": token_usage,
-                            "owner_id": db_task.get("owner_id")
-                            or (db_task.get("extra") or {}).get("owner_id", ""),
-                        })
+                        tasks.append(_row(task_id, db_task))
             except Exception:
                 pass
         
@@ -2562,20 +2781,7 @@ class WorkflowService(TaskControlMixin):
                     state = self._load_state(task_dir.name)
                     if state:
                         seen_ids.add(task_dir.name)
-                        results = state.get("results", [])
-                        token_usage = self._calc_task_token_usage(results)
-                        tasks.append({
-                            "task_id": task_dir.name,
-                            "status": state["status"],
-                            "mode": state.get("mode", ""),
-                            "keywords": state.get("keywords", ""),
-                            "start_time": state.get("start_time", ""),
-                            "current_step": state.get("current_step", 0),
-                            "total_steps": state.get("total_steps", 0),
-                            "token_usage": token_usage,
-                            "owner_id": state.get("owner_id")
-                            or (state.get("extra") or {}).get("owner_id", ""),
-                        })
+                        tasks.append(_row(task_dir.name, state))
         
         return sorted(tasks, key=lambda x: x["start_time"], reverse=True)
     
